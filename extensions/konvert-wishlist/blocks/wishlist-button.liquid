@@ -1,0 +1,31 @@
+{% assign current_variant = product.selected_or_first_available_variant %}
+{% render 'kw-config', header_icon: false, collection_cards: false %}
+
+<div class="kw-block" {{ block.shopify_attributes }}>
+  <button
+    type="button"
+    class="kw-btn kw-btn--product"
+    data-kw-button
+    data-kw-product-id="{{ product.id }}"
+    data-kw-handle="{{ product.handle }}"
+    data-kw-title="{{ product.title | escape }}"
+    data-kw-variant-id="{{ current_variant.id }}"
+    aria-pressed="false"
+  >
+    <span class="kw-heart" aria-hidden="true"></span>
+    <span class="kw-btn__label" data-kw-label>{{ 'kw.add' | t }}</span>
+  </button>
+</div>
+
+{% schema %}
+{
+  "name": "Wishlist button",
+  "target": "section",
+  "enabled_on": {
+    "templates": ["product"]
+  },
+  "javascript": "konvert-wishlist.js",
+  "stylesheet": "konvert-wishlist.css",
+  "settings": []
+}
+{% endschema %}

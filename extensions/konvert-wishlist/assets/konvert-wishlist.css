@@ -1,0 +1,871 @@
+.kw-heart {
+  display: inline-flex;
+  width: 1.25em;
+  height: 1.25em;
+  color: var(--kw-accent, #d6336c);
+}
+
+.kw-heart svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+[aria-pressed='true'] > .kw-heart svg,
+.kw-header-icon--filled .kw-heart svg {
+  fill: currentColor;
+}
+
+.kw-btn {
+  font: inherit;
+  cursor: pointer;
+}
+
+.kw-btn[disabled] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.kw-block {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 1rem 0 0;
+}
+
+.kw-btn--product {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0.5em 1em;
+  line-height: 1.3;
+  color: inherit;
+  text-align: center;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: var(--buttons-radius, 4px);
+  touch-action: manipulation;
+}
+
+.kw-btn--product .kw-heart {
+  flex: none;
+}
+
+.kw-btn--product .kw-btn__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.kw-btn--loading {
+  cursor: progress;
+}
+
+/* Each product card is its own stacking context. The heart's z-index (above the
+   theme's full-card overlay link) is therefore local to its card, and the whole
+   card, heart included, stays below sticky headers, drawers and overlays. */
+.kw-card-host {
+  isolation: isolate;
+}
+
+.kw-btn--card {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.92);
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.kw-btn--card .kw-heart {
+  width: 22px;
+  height: 22px;
+}
+
+.kw-header-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Mobile and tablet headers: when the wishlist icon would make the theme header
+   taller (the logo wraps) or push into the logo, the script adds this class to the
+   header. Its menu | logo | icons grid then sizes the two side columns to their
+   content and gives the logo the rest, the layout Dawn uses itself for headers with
+   an app block. Only the header's column sizing changes; every control stays put. */
+@media (max-width: 989px) {
+  /* [class] raises specificity just enough to win over the theme's own header rules */
+  header.kw-header--tight[class] {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  /* Very narrow screens, only after the rule above was not enough. */
+  header.kw-header--tight.kw-header--compact[class] {
+    padding-right: 1.5rem;
+    padding-left: 1.5rem;
+  }
+}
+
+.kw-header-icon__count {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  min-width: 18px;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  color: #fff;
+  background: var(--kw-accent, #d6336c);
+  border-radius: 9px;
+}
+
+.kw-header-icon__count[hidden] {
+  display: none;
+}
+
+.kw-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  left: 16px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  color: #1a1a1a;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.kw-toast a {
+  font-weight: 600;
+  color: var(--kw-accent, #d6336c);
+}
+
+.kw-toast button {
+  font: inherit;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+/* ---------- My Wishlist page ----------
+   Colours, fonts and radii come from the active theme's CSS variables (Dawn-style
+   names) with neutral fallbacks, so the page follows the storefront theme. */
+
+/* ---------- My Wishlist page (table layout) ----------
+   Text colour, font and background follow the active theme's CSS variables
+   (Dawn-style names) with neutral fallbacks. */
+
+.kw-page {
+  --kw-text: rgb(var(--color-foreground, var(--color-base-text, 18, 18, 18)));
+  --kw-line: rgba(var(--color-foreground, var(--color-base-text, 18, 18, 18)), 0.12);
+  --kw-muted: rgba(var(--color-foreground, var(--color-base-text, 18, 18, 18)), 0.65);
+  --kw-head: rgba(var(--color-foreground, var(--color-base-text, 18, 18, 18)), 0.06);
+  --kw-in: #1a7f37;
+  --kw-out: #c62828;
+
+  box-sizing: border-box;
+  max-width: 1200px;
+  padding: 32px 20px 64px;
+  margin: 0 auto;
+  color: var(--kw-text);
+  background: rgb(var(--color-background, var(--color-base-background-1, 255, 255, 255)));
+}
+
+.kw-page__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin-bottom: 20px;
+}
+
+.kw-page__title {
+  margin: 0;
+  font-size: clamp(2rem, 3.2vw, 2.8rem);
+  line-height: 1.2;
+}
+
+.kw-page__count {
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.kw-page__select {
+  min-height: 40px;
+  padding: 0 22px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--kw-text);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--kw-text);
+  border-radius: var(--buttons-radius, 4px);
+}
+
+.kw-page__select[hidden] {
+  display: none;
+}
+
+.kw-page__select[aria-pressed='true'] {
+  color: #fff;
+  background: var(--kw-text);
+}
+
+/* Bulk actions bar (Select mode) */
+.kw-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  background: var(--kw-head);
+  border: 1px solid var(--kw-line);
+}
+
+.kw-bulk[hidden] {
+  display: none;
+}
+
+.kw-bulk__count {
+  margin-right: auto;
+  font-weight: 600;
+}
+
+/* Table */
+.kw-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--kw-line);
+}
+
+.kw-table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+}
+
+.kw-th {
+  padding: 14px 16px;
+  font-size: 1.4rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  background: var(--kw-head);
+  border-bottom: 1px solid var(--kw-line);
+}
+
+.kw-td {
+  padding: 18px 16px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--kw-line);
+}
+
+.kw-row:last-child .kw-td {
+  border-bottom: 0;
+}
+
+/* The select column only exists in Select mode. */
+.kw-th--select,
+.kw-td--select {
+  display: none;
+  width: 44px;
+}
+
+.kw-table--select .kw-th--select,
+.kw-table--select .kw-td--select {
+  display: table-cell;
+}
+
+.kw-th--remove,
+.kw-td--remove {
+  width: 76px;
+  text-align: center;
+}
+
+.kw-th--image,
+.kw-td--image {
+  width: 132px;
+}
+
+.kw-th--price,
+.kw-td--price {
+  width: 120px;
+}
+
+.kw-th--stock,
+.kw-td--stock {
+  width: 150px;
+}
+
+.kw-th--qty,
+.kw-td--qty {
+  width: 130px;
+}
+
+.kw-th--action,
+.kw-td--action {
+  width: 170px;
+}
+
+.kw-check {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--kw-text);
+}
+
+.kw-row__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font: inherit;
+  font-size: 2.4rem;
+  line-height: 1;
+  color: var(--kw-muted);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+}
+
+.kw-row__remove:hover {
+  color: var(--kw-out);
+  background: var(--kw-head);
+}
+
+.kw-row__remove[disabled] {
+  cursor: progress;
+  opacity: 0.5;
+}
+
+.kw-thumb {
+  display: block;
+  width: 100px;
+  height: 100px;
+  overflow: hidden;
+  background: var(--kw-head);
+  border-radius: 4px;
+}
+
+.kw-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.kw-row__title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.4;
+  color: inherit;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.kw-row__title:hover {
+  text-decoration: underline;
+}
+
+/* Which variant a row is, when the product has several (for example "Large / Red"). */
+.kw-row__variant {
+  display: block;
+  margin-top: 2px;
+  font-size: 1.3rem;
+  color: var(--kw-muted);
+  overflow-wrap: anywhere;
+}
+
+.kw-row__variant:empty {
+  display: none;
+}
+
+.kw-price {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.kw-price__compare {
+  display: inline-block;
+  margin-left: 8px;
+  white-space: nowrap;
+  font-weight: 400;
+  color: var(--kw-muted);
+}
+
+.kw-stock {
+  font-weight: 600;
+}
+
+.kw-stock--in {
+  color: var(--kw-in);
+}
+
+.kw-stock--out {
+  color: var(--kw-out);
+}
+
+.kw-stock--legacy,
+.kw-stock--unknown {
+  font-weight: 400;
+  color: var(--kw-muted);
+}
+
+/* Quantity: compact "- 1 +" */
+.kw-qty {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--kw-line);
+  border-radius: var(--inputs-radius, 4px);
+}
+
+.kw-qty__btn {
+  width: 34px;
+  padding: 0;
+  font: inherit;
+  font-size: 1.8rem;
+  line-height: 1;
+  color: var(--kw-text);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+
+.kw-qty__input {
+  box-sizing: border-box;
+  width: 44px;
+  min-height: 38px;
+  padding: 0;
+  font: inherit;
+  color: var(--kw-text);
+  text-align: center;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--kw-line);
+  border-left: 1px solid var(--kw-line);
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.kw-qty__input::-webkit-outer-spin-button,
+.kw-qty__input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.kw-qty__btn[disabled],
+.kw-qty__input[disabled] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* Action buttons: black "Add to cart", grey disabled "Sold out" */
+.kw-btn-cart {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 16px;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  background: #000;
+  border: 1px solid #000;
+  border-radius: var(--buttons-radius, 4px);
+}
+
+.kw-btn-cart:hover {
+  opacity: 0.85;
+}
+
+.kw-btn-cart--outline {
+  color: var(--kw-text);
+  background: transparent;
+  border-color: var(--kw-text);
+}
+
+.kw-btn-cart--disabled,
+.kw-btn-cart--disabled:hover {
+  color: #6b6b6b;
+  cursor: not-allowed;
+  background: #e1e1e1;
+  border-color: #e1e1e1;
+  opacity: 1;
+}
+
+.kw-btn-cart[disabled]:not(.kw-btn-cart--disabled) {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.kw-btn-cart--notify[disabled] {
+  cursor: default;
+}
+
+.kw-btn-cart--compact {
+  width: auto;
+  min-height: 38px;
+}
+
+.kw-page__select:focus-visible,
+.kw-row__remove:focus-visible,
+.kw-row__title:focus-visible,
+.kw-thumb:focus-visible,
+.kw-qty__btn:focus-visible,
+.kw-qty__input:focus-visible,
+.kw-btn-cart:focus-visible,
+.kw-check:focus-visible,
+.kw-empty__link:focus-visible {
+  outline: 2px solid var(--kw-text);
+  outline-offset: 2px;
+}
+
+/* Empty state */
+.kw-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 440px;
+  padding: 48px 20px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.kw-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+  height: 84px;
+  margin-bottom: 18px;
+  background: var(--kw-head);
+  border-radius: 50%;
+}
+
+.kw-empty__icon .kw-heart {
+  width: 40px;
+  height: 40px;
+}
+
+.kw-empty__title {
+  margin: 0 0 8px;
+  font-size: 2.2rem;
+}
+
+.kw-empty__text {
+  margin: 0 0 24px;
+  color: var(--kw-muted);
+}
+
+.kw-empty__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 28px;
+  font-weight: 600;
+  color: #fff;
+  text-decoration: none;
+  background: #000;
+  border-radius: var(--buttons-radius, 4px);
+}
+
+.kw-empty__link:hover {
+  opacity: 0.85;
+}
+
+.kw-page__login a {
+  color: inherit;
+}
+
+/* Tablet: tighter spacing and smaller thumbnails; the table scrolls sideways if needed. */
+@media (max-width: 1000px) {
+  .kw-td,
+  .kw-th {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .kw-thumb {
+    width: 80px;
+    height: 80px;
+  }
+
+  .kw-th--image,
+  .kw-td--image {
+    width: 104px;
+  }
+
+  .kw-th--action,
+  .kw-td--action {
+    width: 150px;
+  }
+}
+
+/* Mobile and small tablets (up to 860px): each product becomes a stacked card.
+   No horizontal scrolling and no squeezed columns. Grid areas:
+     [img] name  name  [remove]
+     [img] price price price
+     [img] stock stock stock
+     qty   qty   act   act                                                     */
+@media (max-width: 860px) {
+  .kw-page {
+    padding: 24px 14px 48px;
+    overflow-x: hidden;
+  }
+
+  .kw-page__header {
+    align-items: flex-start;
+  }
+
+  .kw-table-wrap {
+    overflow-x: visible;
+    border: 0;
+  }
+
+  .kw-table,
+  .kw-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .kw-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .kw-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr) minmax(0, 1fr) 44px;
+    grid-template-areas:
+      'img name name rm'
+      'img price price price'
+      'img stock stock stock'
+      'qty qty act act';
+    gap: 6px 12px;
+    align-items: center;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--kw-line);
+  }
+
+  .kw-table--select .kw-row {
+    padding-left: 34px;
+  }
+
+  .kw-td {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .kw-td--image {
+    grid-area: img;
+    width: auto;
+    align-self: start;
+  }
+
+  .kw-td--name {
+    grid-area: name;
+  }
+
+  .kw-td--remove {
+    grid-area: rm;
+    width: auto;
+    align-self: start;
+    justify-self: end;
+  }
+
+  .kw-td--price {
+    grid-area: price;
+    width: auto;
+  }
+
+  .kw-td--stock {
+    grid-area: stock;
+    width: auto;
+  }
+
+  .kw-td--qty {
+    grid-area: qty;
+    width: auto;
+    margin-top: 8px;
+  }
+
+  .kw-td--action {
+    grid-area: act;
+    width: auto;
+    margin-top: 8px;
+  }
+
+  /* Checkbox sits in the left gutter that Select mode opens up. */
+  .kw-table--select .kw-td--select {
+    position: absolute;
+    top: 18px;
+    left: 0;
+    display: block;
+    width: auto;
+  }
+
+  .kw-table--select .kw-th--select {
+    display: none;
+  }
+
+  .kw-thumb {
+    width: 88px;
+    height: 88px;
+  }
+
+  .kw-row__title {
+    -webkit-line-clamp: 3;
+  }
+
+  .kw-price,
+  .kw-line {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .kw-row__remove {
+    width: 44px;
+    height: 44px;
+    margin: -6px -6px 0 0;
+  }
+
+  .kw-qty__btn {
+    width: 38px;
+  }
+
+  .kw-qty__btn,
+  .kw-qty__input {
+    min-height: 44px;
+  }
+
+  .kw-btn-cart {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 10px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .kw-bulk {
+    padding: 12px;
+  }
+
+  .kw-bulk .kw-btn-cart {
+    flex: 1 1 140px;
+    width: auto;
+  }
+
+  .kw-empty {
+    padding: 32px 8px;
+  }
+}
+
+/* Very narrow phones (320px): keep the thumbnail and gaps smaller. */
+@media (max-width: 360px) {
+  .kw-row {
+    grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1fr) 44px;
+    gap: 6px 10px;
+  }
+
+  .kw-thumb {
+    width: 72px;
+    height: 72px;
+  }
+
+  .kw-table--select .kw-row {
+    padding-left: 30px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-row__remove,
+  .kw-btn-cart {
+    transition: none;
+  }
+}
+
+/* Line total (estimated subtotal) under the unit price, and the max-quantity note. */
+.kw-line {
+  margin-top: 4px;
+  font-size: 1.3rem;
+  font-weight: 400;
+  color: var(--kw-muted);
+}
+
+.kw-line[hidden] {
+  display: none;
+}
+
+.kw-action__note {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 1.3rem;
+  color: var(--kw-in);
+}
+
+@media (min-width: 861px) {
+  .kw-th--price,
+  .kw-td--price {
+    width: 160px;
+  }
+}
+
+/* Wishlist switched off by the merchant (Settings): nothing of it is shown. */
+.kw-wishlist-off .kw-block,
+.kw-wishlist-off .kw-header-icon,
+.kw-wishlist-off [data-kw-button] {
+  display: none !important;
+}

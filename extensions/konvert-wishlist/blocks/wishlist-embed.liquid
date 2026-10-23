@@ -1,0 +1,46 @@
+{% render 'kw-config',
+  header_icon: block.settings.show_header_icon,
+  collection_cards: block.settings.show_collection_cards,
+  notify_enabled: block.settings.notify_me
+%}
+
+<style>
+  :root {
+    --kw-accent: {{ block.settings.accent_color }};
+  }
+</style>
+
+{% schema %}
+{
+  "name": "Wishlist embed",
+  "target": "body",
+  "javascript": "konvert-wishlist.js",
+  "stylesheet": "konvert-wishlist.css",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "show_header_icon",
+      "label": "Show wishlist icon in the header",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_collection_cards",
+      "label": "Show hearts on product cards (home page, collections, search)",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "notify_me",
+      "label": "Show Notify Me instead of Add to cart for sold-out variants",
+      "default": true
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Heart color",
+      "default": "#d6336c"
+    }
+  ]
+}
+{% endschema %}

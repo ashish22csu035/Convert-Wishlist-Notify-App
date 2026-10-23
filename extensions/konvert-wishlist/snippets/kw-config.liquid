@@ -1,0 +1,102 @@
+{% doc %}
+  Outputs the JSON settings read by konvert-wishlist.js.
+  The customer object is used only to choose between "save" and "log in" in
+  the UI. The server never trusts it: it verifies the customer through the
+  signed App Proxy request.
+
+  @param {boolean} [header_icon] - Show the wishlist icon in the header
+  @param {boolean} [collection_cards] - Show hearts on collection product cards
+  @param {boolean} [notify_enabled] - Replace Add to cart with Notify Me for sold-out variants
+
+  @example
+  {% render 'kw-config', header_icon: true, collection_cards: true, notify_enabled: true %}
+{% enddoc %}
+<script type="application/json" data-kw-config>
+  {
+    "loggedIn": {% if customer %}true{% else %}false{% endif %},
+    "apiPath": "/apps/konvert-notify/api/wishlist",
+    "notifyPath": "/apps/konvert-notify/api/notify",
+    "featuresPath": "/apps/konvert-notify/api/features",
+    "notifyEnabled": {% if notify_enabled %}true{% else %}false{% endif %},
+    "productHandle": {{ product.handle | json }},
+    "inventoryPath": "/apps/konvert-notify/api/inventory",
+    "pagePath": "/apps/konvert-notify/my-wishlist",
+    "extrasUrl": {{ 'konvert-wishlist-extras.js' | asset_url | json }},
+    "loginUrl": {{ routes.account_login_url | json }},
+    "pageType": {{ request.page_type | json }},
+    "headerIcon": {% if header_icon %}true{% else %}false{% endif %},
+    "collectionCards": {% if collection_cards %}true{% else %}false{% endif %},
+    "text": {
+      "add": {{ 'kw.add' | t | json }},
+      "saved": {{ 'kw.saved' | t | json }},
+      "loginPrompt": {{ 'kw.login_prompt' | t | json }},
+      "loginLink": {{ 'kw.login_link' | t | json }},
+      "close": {{ 'kw.close' | t | json }},
+      "full": {{ 'kw.full' | t | json }},
+      "error": {{ 'kw.error' | t | json }},
+      "headerLabel": {{ 'kw.header_label' | t | json }},
+      "empty": {{ 'kw.empty' | t | json }},
+      "continueShopping": {{ 'kw.continue_shopping' | t | json }},
+      "emptyHint": {{ 'kw.empty_hint' | t | json }},
+      "remove": {{ 'kw.remove' | t | json }},
+      "removeLabel": {{ 'kw.remove_label' | t | json }},
+      "loadError": {{ 'kw.load_error' | t | json }},
+      "itemSingular": {{ 'kw.item_singular' | t | json }},
+      "itemPlural": {{ 'kw.item_plural' | t | json }},
+      "addToCart": {{ 'kw.add_to_cart' | t | json }},
+      "adding": {{ 'kw.adding' | t | json }},
+      "addedToCart": {{ 'kw.added_to_cart' | t | json }},
+      "cartError": {{ 'kw.cart_error' | t | json }},
+      "soldOut": {{ 'kw.sold_out' | t | json }},
+      "unavailable": {{ 'kw.unavailable' | t | json }},
+      "wishlistOff": {{ 'kw.wishlist_off' | t | json }},
+      "colRemove": {{ 'kw.col_remove' | t | json }},
+      "colImage": {{ 'kw.col_image' | t | json }},
+      "colName": {{ 'kw.col_name' | t | json }},
+      "colPrice": {{ 'kw.col_price' | t | json }},
+      "colStock": {{ 'kw.col_stock' | t | json }},
+      "colQuantity": {{ 'kw.col_quantity' | t | json }},
+      "colAction": {{ 'kw.col_action' | t | json }},
+      "inStock": {{ 'kw.in_stock' | t | json }},
+      "outOfStock": {{ 'kw.out_of_stock' | t | json }},
+      "availabilityUnavailable": {{ 'kw.availability_unavailable' | t | json }},
+      "unavailableButton": {{ 'kw.unavailable_button' | t | json }},
+      "qtyDecrease": {{ 'kw.qty_decrease' | t | json }},
+      "qtyIncrease": {{ 'kw.qty_increase' | t | json }},
+      "quantity": {{ 'kw.quantity' | t | json }},
+      "select": {{ 'kw.select' | t | json }},
+      "cancel": {{ 'kw.cancel' | t | json }},
+      "selectAll": {{ 'kw.select_all' | t | json }},
+      "selectRow": {{ 'kw.select_row' | t | json }},
+      "selectedCount": {{ 'kw.selected_count' | t | json }},
+      "addSelected": {{ 'kw.add_selected' | t | json }},
+      "removeSelected": {{ 'kw.remove_selected' | t | json }},
+      "nonePurchasable": {{ 'kw.none_purchasable' | t | json }},
+      "removeError": {{ 'kw.remove_error' | t | json }},
+      "lineTotal": {{ 'kw.line_total' | t | json }},
+      "lineTotalHint": {{ 'kw.line_total_hint' | t | json }},
+      "cartUnconfirmed": {{ 'kw.cart_unconfirmed' | t | json }},
+      "invalidVariant": {{ 'kw.invalid_variant' | t | json }},
+      "invalidQuantity": {{ 'kw.invalid_quantity' | t | json }},
+      "cartStock": {{ 'kw.cart_stock' | t | json }},
+      "cartAddedRemoveFailed": {{ 'kw.cart_added_remove_failed' | t | json }},
+      "retryRemove": {{ 'kw.retry_remove' | t | json }},
+      "noVariantToSave": {{ 'kw.no_variant_to_save' | t | json }},
+      "legacyVariant": {{ 'kw.legacy_variant' | t | json }},
+      "viewProduct": {{ 'kw.view_product' | t | json }},
+      "loginRedirect": {{ 'kw.login_redirect' | t | json }},
+      "loginStillRequired": {{ 'kw.login_still_required' | t | json }},
+      "savedAfterLogin": {{ 'kw.saved_after_login' | t | json }},
+      "notifyMe": {{ 'kw.notify_me' | t | json }},
+      "notifySubscribed": {{ 'kw.notify_subscribed' | t | json }},
+      "notifySuccess": {{ 'kw.notify_success' | t | json }},
+      "notifyAvailable": {{ 'kw.notify_available' | t | json }},
+      "notifyEmailError": {{ 'kw.notify_email_error' | t | json }},
+      "notifyUnavailable": {{ 'kw.notify_unavailable' | t | json }},
+      "notifyNotOffered": {{ 'kw.notify_not_offered' | t | json }},
+      "notifyError": {{ 'kw.notify_error' | t | json }},
+      "notifyLoginRedirect": {{ 'kw.notify_login_redirect' | t | json }},
+      "notifyLoginStillRequired": {{ 'kw.notify_login_still_required' | t | json }}
+    }
+  }
+</script>

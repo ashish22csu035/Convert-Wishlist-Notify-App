@@ -1,0 +1,383 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?   @db.Text
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// Konvert Wishlist + Notify Me application models.
+//
+// Tenant isolation: every row carries shopId. Child rows reference their
+// parent through the composite key (id, shopId), so MySQL refuses a row whose
+// parent belongs to a different shop. Shopify ids are always stored as full
+// GIDs (gid://shopify/...). Money is stored in the shop's currency.
+//
+// Not representable in Prisma, added by hand in the migration SQL:
+//   - CHECK: BrowsingSession.expiresAt = startedAt + 30 minutes
+//   - CHECK: money columns and counters are non-negative
+// ---------------------------------------------------------------------------
+
+enum ShopStatus {
+  ACTIVE
+  UNINSTALLED
+}
+
+enum Feature {
+  WISHLIST
+  NOTIFY_ME
+}
+
+enum ActivityType {
+  WISHLIST_ADDED
+  WISHLIST_ADDED_TO_CART
+  WISHLIST_REMOVED
+  WISHLIST_PRODUCT_CLICKED
+  NOTIFY_SUBSCRIBED
+  NOTIFY_UNSUBSCRIBED
+  RESTOCK_EMAIL_SENT
+  RESTOCK_EMAIL_CLICKED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  FULFILLED
+  UNSUBSCRIBED
+}
+
+enum DeliveryStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  UNKNOWN
+  SKIPPED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+enum AttributionStatus {
+  ACTIVE
+  REVERSED
+}
+
+model Shop {
+  id            String     @id @default(uuid()) @db.Char(36)
+  domain        String     @unique
+  name          String?
+  currencyCode  String     @db.VarChar(3)
+  timezone      String?    @db.VarChar(64)
+  status        ShopStatus @default(ACTIVE)
+  installedAt   DateTime   @default(now())
+  uninstalledAt DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  settings      ShopSettings?
+  actors        Actor[]
+  availability  VariantAvailability[]
+  orders        ShopifyOrder[]
+  webhookEvents WebhookEvent[]
+}
+
+model ShopSettings {
+  id                    String   @id @default(uuid()) @db.Char(36)
+  shopId                String   @unique @db.Char(36)
+  wishlistEnabled       Boolean  @default(true)
+  notifyMeEnabled       Boolean  @default(true)
+  senderName            String?  @db.VarChar(100)
+  replyToEmail          String?  @db.VarChar(320)
+  emailSubject          String?  @db.VarChar(255)
+  emailBody             String?  @db.Text
+  buttonLabel           String?  @db.VarChar(64)
+  activityRetentionDays Int      @default(180)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
+
+// A logged-in Shopify customer, identified only by the verified customer GID.
+model Actor {
+  id          String   @id @default(uuid()) @db.Char(36)
+  shopId      String   @db.Char(36)
+  customerGid String
+  lastSeenAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  shop             Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  browsingSessions BrowsingSession[]
+  wishlistItems    WishlistItem[]
+  subscriptions    NotifySubscription[]
+  events           ActivityEvent[]
+
+  @@unique([id, shopId])
+  @@unique([shopId, customerGid])
+}
+
+// Fixed 30-minute window. expiresAt is set once at creation and never extended.
+model BrowsingSession {
+  id        String   @id @default(uuid()) @db.Char(36)
+  shopId    String   @db.Char(36)
+  actorId   String   @db.Char(36)
+  feature   Feature  @default(WISHLIST)
+  startedAt DateTime @default(now()) @db.DateTime(3)
+  expiresAt DateTime @db.DateTime(3)
+
+  actor  Actor           @relation(fields: [actorId, shopId], references: [id, shopId], onDelete: Cascade)
+  events ActivityEvent[]
+
+  @@unique([id, shopId])
+  @@unique([id, shopId, feature])
+  @@index([actorId, expiresAt])
+  @@index([shopId, startedAt])
+}
+
+// A saved product variant.
+model WishlistItem {
+  id            String   @id @default(uuid()) @db.Char(36)
+  shopId        String   @db.Char(36)
+  actorId       String   @db.Char(36)
+  productGid    String
+  variantGid    String?
+  productTitle  String
+  productHandle String
+  createdAt     DateTime @default(now())
+
+  actor Actor @relation(fields: [actorId, shopId], references: [id, shopId], onDelete: Cascade)
+
+  // One entry per customer per VARIANT. variantGid is NULL only on older rows saved before
+  // wishlist items became variant-specific (MySQL allows many NULLs in a unique index).
+  @@unique([actorId, variantGid])
+  @@index([actorId, productGid])
+  @@index([shopId, productGid])
+  @@index([shopId, createdAt])
+}
+
+model NotifySubscription {
+  id             String             @id @default(uuid()) @db.Char(36)
+  shopId         String             @db.Char(36)
+  actorId        String             @db.Char(36)
+  productGid     String
+  variantGid     String
+  email          String             @db.VarChar(320)
+  status         SubscriptionStatus @default(ACTIVE)
+  consentedAt    DateTime
+  consentSource  String             @db.VarChar(64)
+  baselineCycle  Int                @default(0)
+  unsubscribedAt DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  actor      Actor           @relation(fields: [actorId, shopId], references: [id, shopId], onDelete: Cascade)
+  deliveries EmailDelivery[]
+
+  @@unique([id, shopId])
+  @@unique([shopId, actorId, variantGid])
+  @@index([shopId, variantGid, status])
+  @@index([status, updatedAt])
+}
+
+// Current stock state per variant. restockCycle increases each time the variant
+// goes from out of stock to in stock.
+model VariantAvailability {
+  id               String    @id @default(uuid()) @db.Char(36)
+  shopId           String    @db.Char(36)
+  variantGid       String
+  productGid       String
+  inventoryItemGid String
+  isInStock        Boolean
+  restockCycle     Int       @default(0)
+  sourceUpdatedAt  DateTime? @db.DateTime(3)
+  lastSyncedAt     DateTime  @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, variantGid])
+  @@index([shopId, inventoryItemGid])
+  @@index([shopId, productGid])
+}
+
+model ActivityEvent {
+  id                String       @id @default(uuid()) @db.Char(36)
+  shopId            String       @db.Char(36)
+  actorId           String       @db.Char(36)
+  browsingSessionId String?      @db.Char(36)
+  type              ActivityType
+  feature           Feature
+  productGid        String?
+  variantGid        String?
+  occurredAt        DateTime     @default(now())
+
+  actor        Actor              @relation(fields: [actorId, shopId], references: [id, shopId], onDelete: Cascade)
+  session      BrowsingSession?   @relation(fields: [browsingSessionId, shopId, feature], references: [id, shopId, feature], onDelete: Cascade)
+  attributions OrderAttribution[]
+
+  @@index([shopId, occurredAt])
+  @@index([shopId, type, occurredAt])
+  @@index([actorId, type, occurredAt])
+  @@index([browsingSessionId])
+}
+
+// One restock email attempt for one subscription in one restock cycle.
+// UNIQUE(subscriptionId, restockCycle) is what prevents duplicate emails.
+model EmailDelivery {
+  id                String         @id @default(uuid()) @db.Char(36)
+  shopId            String         @db.Char(36)
+  subscriptionId    String         @db.Char(36)
+  restockCycle      Int
+  variantGid        String
+  status            DeliveryStatus @default(PENDING)
+  attempts          Int            @default(0)
+  nextAttemptAt     DateTime?
+  leaseExpiresAt    DateTime?
+  sentAt            DateTime?
+  outboundMessageId String?        @unique
+  linkTokenHash     String?        @unique @db.Char(64)
+  errorCode         String?        @db.VarChar(64)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  subscription NotifySubscription @relation(fields: [subscriptionId, shopId], references: [id, shopId], onDelete: Cascade)
+
+  @@unique([subscriptionId, restockCycle])
+  @@index([status, nextAttemptAt])
+  @@index([shopId, createdAt])
+}
+
+// Dedupe and audit log for incoming webhooks. No payload is stored.
+model WebhookEvent {
+  id          String        @id @default(uuid()) @db.Char(36)
+  shopDomain  String
+  shopId      String?       @db.Char(36)
+  topic       String        @db.VarChar(100)
+  dedupeKey   String
+  webhookId   String
+  resourceGid String?
+  triggeredAt DateTime?
+  status      WebhookStatus @default(RECEIVED)
+  attempts    Int           @default(0)
+  errorCode   String?       @db.VarChar(64)
+  receivedAt  DateTime      @default(now())
+  processedAt DateTime?
+
+  shop Shop? @relation(fields: [shopId], references: [id], onDelete: SetNull)
+
+  @@unique([shopDomain, topic, dedupeKey])
+  @@index([receivedAt])
+  @@index([status, receivedAt])
+}
+
+model ShopifyOrder {
+  id               Int       @id @default(autoincrement())
+  shopId           String    @db.Char(36)
+  orderGid         String
+  orderName        String    @db.VarChar(64)
+  customerGid      String?
+  placedAt         DateTime
+  cancelledAt      DateTime?
+  financialStatus  String    @db.VarChar(32)
+  currencyCode     String    @db.VarChar(3)
+  totalPrice       Decimal   @db.Decimal(19, 4)
+  totalRefunded    Decimal   @default(0) @db.Decimal(19, 4)
+  shopifyUpdatedAt DateTime
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  shop         Shop                   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  lineItems    ShopifyOrderLineItem[]
+  attributions OrderAttribution[]
+
+  @@unique([id, shopId])
+  @@unique([shopId, orderGid])
+  @@index([shopId, placedAt])
+  @@index([shopId, customerGid, placedAt])
+}
+
+model ShopifyOrderLineItem {
+  id             Int     @id @default(autoincrement())
+  shopId         String  @db.Char(36)
+  orderId        Int
+  lineItemGid    String
+  productGid     String
+  variantGid     String?
+  quantity       Int
+  lineTotal      Decimal @db.Decimal(19, 4)
+  refundedAmount Decimal @default(0) @db.Decimal(19, 4)
+
+  order ShopifyOrder @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
+
+  @@unique([orderId, lineItemGid])
+  @@index([shopId, variantGid])
+  @@index([shopId, productGid])
+}
+
+// One attribution per order, feature, and purchased product. This keeps each
+// line item's last-touch decision independent while retaining product-level
+// reporting and order-level idempotency.
+model OrderAttribution {
+  id                Int               @id @default(autoincrement())
+  shopId            String            @db.Char(36)
+  orderId           Int
+  feature           Feature
+  touchEventId      String?           @db.Char(36)
+  touchedAt         DateTime
+  matchedProductGid String
+  matchedVariantGid String?
+  grossAmount       Decimal           @db.Decimal(19, 4)
+  refundedAmount    Decimal           @default(0) @db.Decimal(19, 4)
+  currencyCode      String            @db.VarChar(3)
+  status            AttributionStatus @default(ACTIVE)
+  attributedAt      DateTime          @default(now())
+
+  order      ShopifyOrder   @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
+  touchEvent ActivityEvent? @relation(fields: [touchEventId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, shopId, feature, matchedProductGid], map: "OrderAttribution_order_shop_feature_product_key")
+  @@index([shopId, feature, attributedAt])
+  @@index([touchEventId])
+}
+
+// The old numeric id of every row whose primary key became a UUID v4, kept so a row can still be traced to
+// the id it had before the migration (20261022120000_uuid_primary_keys). Written once by that migration.
+model IdMapping {
+  tableName String   @db.VarChar(64)
+  oldId     Int
+  newId     String   @unique @db.Char(36)
+  createdAt DateTime @default(now())
+
+  @@id([tableName, oldId])
+}
