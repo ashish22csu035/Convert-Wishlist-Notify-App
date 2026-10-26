@@ -156,6 +156,17 @@ Stored per order (existing `ShopifyOrder`, `ShopifyOrderLineItem`, `OrderAttribu
 
 Webhooks are logged one line per delivery as `[orders] webhook handled …` (no order contents), so "not delivered", "rejected" and "processed" can be told apart like the inventory webhook.
 
+## Wishlist Settings (appearance)
+
+Merchants open **Settings > Wishlist Settings** (`/app/wishlist-settings`) to choose the icon, colors, product button, collection hearts and Wishlist page layout. It is separate from the two master switches on **Settings**; neither screen writes the other's data.
+
+- **Stored** in `ShopSettings.wishlistAppearance` (nullable JSON, migration `20261023170000_wishlist_appearance`): a sparse document `{ "version": 1, "general": { "iconType": "star" }, … }` holding only what the merchant changed. `NULL` or `{ "version": 1 }` means "unchanged". Rules and defaults: `app/utils/wishlist-appearance-shared.js`; persistence: `app/models/settings.server.js` (`getAppearance`, `saveAppearance`, `getPublicAppearance`, `getStorefrontFeatures`). The server validates every save; nothing from the browser names a shop.
+- **Reaches the storefront** in the `appearance` field of `GET /apps/konvert-notify/api/features` (same signed proxy, same one-minute per-tab cache as the switches). `konvert-wishlist.js` copies each value onto `<html>` as a `data-kw-<section>-<key>` attribute or `--kw-<section>-<key>` variable, and `konvert-wishlist.css` gives them their effect. With no settings nothing is set, so the CSS fallbacks are the original look. The core script must stay under 10,000 bytes (a test checks it).
+- **Theme editor still decides** whether the Wishlist embed is on (header icon, hearts on product cards) and where the Wishlist button block sits on the product page. App settings can switch those off, never on.
+- **Deploying**: the code changes ship in a new extension version (`shopify app deploy`), and the database needs the migration (`npm run setup`). Until the migration is applied the features endpoint still answers the switches (appearance falls back to unchanged). Extension versions without this code ignore the `appearance` field.
+- **Preview**: `app/components/wishlist-appearance-preview.jsx` draws a sample storefront in an `<iframe>` that loads the real `konvert-wishlist.css` (imported with Vite's `?raw`) and the storefront's own class names, with the form's settings applied as the same `data-kw-*` attributes / `--kw-*` variables the script sets (`app/utils/wishlist-preview-document.js`). So the preview cannot drift from the storefront; `tests/wishlist-preview.test.mjs` compares it with the real script. It runs no script, fetches nothing and saves nothing.
+- **Tests**: `tests/wishlist-appearance.test.mjs` (rules, persistence, migration rehearsal), `tests/wishlist-appearance-storefront.test.mjs` (script and stylesheet), `tests/wishlist-settings-ui.test.mjs` (screen). The database tests write rows: run them only with `DATABASE_URL` pointing at an isolated database whose name starts with `kw_` and contains `test` (they skip themselves otherwise).
+
 ## Shopify Dev MCP
 
 This template is configured with the Shopify Dev MCP. This instructs [Cursor](https://cursor.com/), [GitHub Copilot](https://github.com/features/copilot) and [Claude Code](https://claude.com/product/claude-code) and [Google Gemini CLI](https://github.com/google-gemini/gemini-cli) to use the Shopify Dev MCP.
@@ -217,6 +228,18 @@ When you reach the step for [setting up environment variables](https://shopify.d
 
 ## Gotchas / Troubleshooting
 
+### Blank app area in Shopify Admin after a click
+
+The browser diagnostics panel was removed. Server-side traces remain and are written outside the project:
+
+- `%TEMP%kw-nav-trace.log` has one line per `/app` and `/auth` request: `kind` (data/document), `hasAuthorizationHeader`, `hasIdTokenParam`, `paramNames`, `botLikeUserAgent`, `status`, `redirectPath`; never values or tokens. Shopify's library answers any request with a bot-like User-Agent (curl, headless browsers) with **410 Gone**, so test requests need a normal browser User-Agent.
+- `%TEMP%kw-error.log` has every unhandled server error (route path only, no query string).
+- If the proxy reports `ECONNREFUSED 127.0.0.1:<port>`, check that `vite.config.js` still sets `server.host: "127.0.0.1"`.
+
+### Wishlist Settings says "could not be loaded" (`Unknown field wishlistAppearance`)
+
+The page reads `ShopSettings.wishlistAppearance`. The error means the running app server uses a Prisma client generated before that column existed (look for `PrismaClientValidationError` in the server output, or in `%TEMP%\kw-error.log`). Apply the migration (`npx prisma migrate deploy`), run `npx prisma generate`, and **restart** `shopify app dev`: a long-running dev server keeps the old client in memory. `prisma generate` fails with EPERM while the server is running, so stop it first. The Wishlist and Notify Me switches and the storefront keep working in the meantime.
+
 ### Database tables don't exist
 
 If you get an error like:
@@ -234,6 +257,7 @@ Embedded apps must maintain the user session, which can be tricky inside an iFra
 1. Use `Link` from `react-router` or `@shopify/polaris`. Do not use `<a>`.
 2. Use `redirect` returned from `authenticate.admin`. Do not use `redirect` from `react-router`
 3. Use `useSubmit` from `react-router`.
+4. When `navigate()` moves to another screen, keep `embedded`, `host` and `shop` in the URL: `navigate(withEmbeddedParams("/app/settings", search))` (`app/utils/embedded-url.js`). A plain `navigate("/app/other")` drops them, and any later full reload of that URL inside the Admin iframe (hot reload, a Reload button) requests the page without them: Shopify's session-token page then cannot finish (App Bridge: "missing required configuration fields: shop") and the iframe stays white.
 
 This only applies if your app is embedded, which it will be by default.
 
