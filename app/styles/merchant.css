@@ -486,6 +486,22 @@
   font-size: 13px;
   color: var(--kv-subdued);
 }
+/* A button with its description beside it, wrapping under it on narrow screens. Not a p.help: that rule pulls its
+   text up by 8px, which put the description on top of a button above it. */
+.kv-form-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.kv-form-link p {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--kv-subdued);
+}
 
 /* ---------- Hints, focus, small helpers ---------- */
 .kv-hint {
@@ -942,5 +958,102 @@
     width: auto;
     max-height: 70vh;
     overflow-y: auto;
+  }
+}
+
+/* ---------- Wishlist Settings (four tabs + approximate preview) ---------- */
+button.kv-tab {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.kv-tabs[role="tablist"] {
+  margin-bottom: 16px;
+}
+.kv-wset {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.kv-wset .kv-card-head {
+  padding: 0;
+  border: 0;
+}
+.kv-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.kv-color,
+.kv-url {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+.kv-color > :first-child,
+.kv-url > :first-child {
+  flex: 1 1 220px;
+}
+.kv-preview-card {
+  position: sticky;
+  top: 16px;
+  min-width: 0;
+}
+.kv-wset .kv-preview-card .kv-card-head {
+  padding: 12px 16px;
+}
+/* The size toggle is a .kv-seg, whose selected button takes --accent (set by the KPI cards it was made for). */
+.kv-preview-card .kv-seg {
+  --accent: var(--kv-blue);
+  --edge: var(--kv-border);
+}
+.kv-pv-label {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--kv-subdued);
+}
+/* The grey stage holds one device-shaped frame. The frame is laid out at a real storefront width (see
+   wishlist-appearance-preview.jsx) and scaled to fit, so this box never changes the width of the page around it. */
+.kv-pv-stage {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--kv-bg);
+  border: 1px solid var(--kv-border);
+  border-radius: 8px;
+}
+.kv-pv-device {
+  margin: 0 auto;
+  overflow: hidden;
+  background: var(--kv-surface);
+}
+.kv-pv-device--mobile {
+  border-inline: 1px solid var(--kv-border);
+}
+.kv-pv-frame {
+  display: block;
+  max-width: none;
+  border: 0;
+  background: var(--kv-surface);
+  transform-origin: 0 0;
+}
+.kv-pv-notes {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  list-style: none;
+  font-size: 13px;
+  color: var(--kv-subdued);
+  border: 1px dashed var(--kv-border);
+  border-radius: 6px;
+}
+@media (max-width: 900px) {
+  .kv-wset {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kv-preview-card {
+    position: static;
   }
 }

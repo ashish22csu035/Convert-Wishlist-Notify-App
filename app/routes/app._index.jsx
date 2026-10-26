@@ -7,7 +7,7 @@ import { ActivitySwitch } from "../components/activity-switch";
 import { describePeriod } from "../utils/period";
 import {
   Card,
-  EVENT,
+  eventInfo,
   EmptyState,
   Feed,
   Grid,
@@ -51,7 +51,7 @@ export const loader = async ({ request }) => {
 };
 
 const feedText = (event) => {
-  const info = EVENT[event.type];
+  const info = eventInfo(event.type);
   const name = event.item.title ? `“${event.item.title}”${event.item.variantTitle ? ` (${event.item.variantTitle})` : ""}` : "a product";
   if (event.type === "RESTOCK_EMAIL_SENT") return `${info.verb} ${name}`;
   return `A customer ${info.verb} ${name}${info.suffix ? ` ${info.suffix}` : ""}`;
@@ -110,10 +110,10 @@ export default function Dashboard() {
               items={d.recent.map((event) => ({
                 id: event.id,
                 text: feedText(event),
-                label: EVENT[event.type].label,
+                label: eventInfo(event.type).label,
                 time: timeAgo(event.occurredAt, d.now),
-                icon: EVENT[event.type].icon,
-                tone: EVENT[event.type].tone,
+                icon: eventInfo(event.type).icon,
+                tone: eventInfo(event.type).tone,
               }))}
             />
           )}

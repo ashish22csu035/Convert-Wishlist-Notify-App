@@ -1,3 +1,37 @@
-.cache
-build
+# Dependencies and build output
 node_modules
+**/node_modules
+build
+**/build
+.cache
+**/.cache
+.react-router
+.shopify
+
+# Git and editor metadata
+.git
+.DS_Store
+
+# Secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Local database files
+prisma/dev.sqlite
+prisma/dev.sqlite-journal
+database.sqlite
+*.sqlite
+*.sqlite-journal
+*.dump
+*.bak
+
+# Backups, temporary files and logs
+backups
+**/backups
+*.log
+*.tmp
+npm-debug.log*
+
+# Generated extension output
+extensions/*/dist

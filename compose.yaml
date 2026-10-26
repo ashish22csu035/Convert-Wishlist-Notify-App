@@ -1,0 +1,72 @@
+services:
+  web:
+    image: konvert-wishlist-notify:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    env_file:
+      - .env.runtime
+
+    environment:
+      NODE_ENV: production
+      HOST: "0.0.0.0"
+      PORT: "3000"
+
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    restart: unless-stopped
+    init: true
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const net=require('node:net');const s=net.connect(3000,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    image: konvert-wishlist-notify:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    env_file:
+      - .env.runtime
+
+    environment:
+      NODE_ENV: production
+      WORKER_SKIP_DOTENV: "1"
+
+    # Always-on scheduler: starts the one-shot worker every 10 minutes (app/worker/cron.js).
+    # A single run by hand: docker compose run --rm worker npm run worker
+    command: ["node", "app/worker/cron.js"]
+
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 50s
+
+  migrate:
+    image: konvert-wishlist-notify:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    env_file:
+      - .env.runtime
+
+    environment:
+      NODE_ENV: production
+
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy"]
+
+    # Only run this service deliberately during deployment.
+    profiles:
+      - operations
+
+    restart: "no"

@@ -186,10 +186,17 @@ export function Pager({ page, total, noun }) {
 
 // ---------- Layout ----------
 
-export function Page({ title, subtitle, days, period, actions, children }) {
+// `back` ({ href, label, onNavigate }) fills the page's breadcrumb slot, which is what Shopify Admin draws as the arrow beside the
+// title. Without it Admin falls back to browser history; with it the arrow is a link to an explicit destination.
+export function Page({ title, subtitle, days, period, actions, back, children }) {
   const range = period ?? (days ? { kind: "preset", days } : null);
   return (
     <s-page heading={title} inlineSize="large">
+      {back ? (
+        <s-link slot="breadcrumb-actions" href={back.href} onClick={back.onNavigate}>
+          {back.label}
+        </s-link>
+      ) : null}
       <div className="kv">
         <div className="kv-head">
           <p>{subtitle}</p>
@@ -368,7 +375,23 @@ export const EVENT = {
   NOTIFY_SUBSCRIBED: { label: "Subscribed to Notify Me", verb: "asked to be notified about", suffix: "", icon: "notification", tone: "blue" },
   NOTIFY_UNSUBSCRIBED: { label: "Unsubscribed from Notify Me", verb: "stopped notifications for", suffix: "", icon: "notification", tone: "neutral" },
   RESTOCK_EMAIL_SENT: { label: "Restock email sent", verb: "Restock email sent for", suffix: "", icon: "email", tone: "green" },
+  WISHLIST_ADDED_TO_CART: { label: "Added to cart from Wishlist", verb: "added", suffix: "to their cart from their Wishlist", icon: "cart", tone: "green" },
+  RESTOCK_EMAIL_CLICKED: { label: "Restock email clicked", verb: "clicked the restock email for", suffix: "", icon: "email", tone: "green" },
 };
+
+// Every ActivityType the database can hold must be listed in EVENT above (tests/dashboard-events.test.mjs checks it against
+// prisma/schema.prisma). A type added later still renders, with a generic line, instead of crashing the whole page.
+export function eventInfo(type) {
+  return (
+    EVENT[type] ?? {
+      label: String(type ?? "Activity").toLowerCase().replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()),
+      verb: "had activity on",
+      suffix: "",
+      icon: "product",
+      tone: "neutral",
+    }
+  );
+}
 
 export function Feed({ items }) {
   return (
@@ -392,9 +415,42 @@ export function Feed({ items }) {
 }
 
 // Route-level error boundary: auth redirects and Shopify headers still go through the app boundary.
+// Whether the app layout has rendered in this browser tab. It tells the first page load from a client-side navigation:
+//   - On a first load, Shopify's answer to an unusable session is a page whose <script> (App Bridge) fetches a fresh token and
+//     reloads. The server sends it as HTML, so the browser runs that script: Shopify's own boundary output is correct there.
+//   - After the app is running, a rejected route-data request (a 401, a 410, the same page) reaches the boundary as an error.
+//     The library renders its body with dangerouslySetInnerHTML, and React never runs a <script> set that way: the content
+//     area would be empty (or only say "Handling response") with nothing to click.
+let appRendered = false;
+export const setAppRendered = (value = true) => {
+  appRendered = value;
+};
+
+// Plain elements on purpose: this can replace the whole app layout, where Polaris components may not be available.
+export function SessionRecovery({ status }) {
+  return (
+    <div role="alert" style={{ padding: 24, maxWidth: 560 }}>
+      <h2 style={{ margin: "0 0 8px", fontSize: 16 }}>Your Shopify session needs to be refreshed</h2>
+      <p style={{ margin: "0 0 12px" }}>
+        This page could not be loaded because Shopify did not accept the request (error {status}). Reloading the page refreshes the session. Nothing you saved has changed.
+      </p>
+      <button type="button" onClick={() => window.location.reload()}>
+        Reload page
+      </button>
+    </div>
+  );
+}
+
+// A route error that is one of Shopify's authentication responses: the library's boundary on a first load, a recovery panel after.
+export function authResponseBoundary(error) {
+  if (!(isRouteErrorResponse(error) && [401, 302, 303, 410].includes(error.status))) return null;
+  return appRendered ? <SessionRecovery status={error.status} /> : boundary.error(error);
+}
+
 export function MerchantErrorBoundary() {
   const error = useRouteError();
-  if (isRouteErrorResponse(error) && [401, 302, 303, 410].includes(error.status)) return boundary.error(error);
+  const auth = authResponseBoundary(error);
+  if (auth) return auth;
   return (
     <s-page heading="Something went wrong">
       <s-banner tone="critical" heading="This page could not be loaded">

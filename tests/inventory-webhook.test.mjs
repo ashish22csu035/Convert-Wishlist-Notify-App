@@ -629,7 +629,7 @@ test("an event that stays unresolved is retried a bounded number of times, then 
   assert.deepEqual([row.restockCycle, row.isInStock, await jobCount(shop, variantGid)], [0, false, 0]);
 
   const reads = shopify.log.variants.length;
-  assert.deepEqual(await recoverInventoryEvents({ shopDomains: [shop.domain], deps: shopify.deps({ sleep: noWait }) }), { found: 0, processed: 0, failed: 0 });
+  assert.deepEqual(await recoverInventoryEvents({ shopDomains: [shop.domain], deps: shopify.deps({ sleep: noWait }) }), { found: 0, processed: 0, ignored: 0, skipped: 0, failed: 0 });
   assert.equal(shopify.log.variants.length, reads, "a flagged event is not replayed");
 });
 
@@ -650,10 +650,10 @@ test("recovery: a failed event is replayed from the stored event, restocks once,
   healthy = true;
   const later = () => new Date(Date.now() + 10 * 60 * 1000);
   const summary = await recoverInventoryEvents({ shopDomains: [shop.domain], deps, now: later });
-  assert.deepEqual(summary, { found: 1, processed: 1, failed: 0 });
+  assert.deepEqual(summary, { found: 1, processed: 1, ignored: 0, skipped: 0, failed: 0 });
   assert.deepEqual([(await state(shop, variantGid)).restockCycle, await jobCount(shop, variantGid)], [1, 2]);
   assert.equal((await events(shop))[0].status, "PROCESSED");
-  assert.deepEqual(await recoverInventoryEvents({ shopDomains: [shop.domain], deps, now: later }), { found: 0, processed: 0, failed: 0 });
+  assert.deepEqual(await recoverInventoryEvents({ shopDomains: [shop.domain], deps, now: later }), { found: 0, processed: 0, ignored: 0, skipped: 0, failed: 0 });
   assert.equal((await state(shop, variantGid)).restockCycle, 1);
 });
 
@@ -915,4 +915,104 @@ test("duplicate email prevention: after the one genuine restock the worker sends
   assert.equal(Object.keys((await worker().drain()).outcomes).length, 0, "nothing left to send");
   assert.equal(sent.length, 2, "one email per customer, ever");
   assert.equal(await jobCount(shop, variantGid), 2);
+});
+
+// ======================= recovery: stored-event validation and honest summary =======================
+const seedEvent = (shop, over) =>
+  prisma.webhookEvent.create({
+    data: { shopDomain: shop.domain, shopId: shop.id, topic: "INVENTORY_LEVELS_UPDATE", dedupeKey: `ev-${(seq += 1)}`, webhookId: "w", status: "RECEIVED", attempts: 0, receivedAt: new Date(Date.now() - 3600 * 1000), ...over },
+  });
+const quiet = () => { const orig = console.warn; console.warn = () => {}; return () => { console.warn = orig; }; };
+
+test("recovery: events with a missing, malformed or non-numeric resourceGid are ignored with a code, never replayed, never counted as processed", async () => {
+  const shop = await makeShop("rec-invalid");
+  const { variantGid } = await makeTracked(shop);
+  const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
+  const bad = [null, "k", "gid://shopify/Product/123", "gid://shopify/InventoryItem/abc", "gid://shopify/InventoryItem/0", "gid://shopify/InventoryItem/12/34", "gid://shopify/InventoryItem/"];
+  for (const resourceGid of bad) await seedEvent(shop, { resourceGid });
+  const shopify = fakeShopify((id) => SETTLED(id, 5));
+  const restore = quiet();
+  let summary;
+  try {
+    summary = await recoverInventoryEvents({ shopDomains: [shop.domain], deps: shopify.deps({ sleep: noWait }) });
+  } finally {
+    restore();
+  }
+  assert.deepEqual(summary, { found: bad.length, processed: 0, ignored: bad.length, skipped: 0, failed: 0 });
+  assert.equal(shopify.log.variants.length, 0, "Shopify is not asked about a malformed record");
+  for (const e of await events(shop)) assert.deepEqual([e.status, e.errorCode, e.processedAt instanceof Date], ["IGNORED", "invalid_resource", true]);
+  assert.deepEqual([(await state(shop, variantGid)).restockCycle, await jobCount(shop, variantGid)], [0, 0]);
+  // retired rows are not selected again
+  assert.deepEqual(await recoverInventoryEvents({ shopDomains: [shop.domain], deps: shopify.deps({ sleep: noWait }) }), { found: 0, processed: 0, ignored: 0, skipped: 0, failed: 0 });
+});
+
+test("recovery: a valid stored item is rebuilt and handled, counted as processed, and creates the jobs exactly once", async () => {
+  const shop = await makeShop("rec-valid");
+  const { itemId, variantGid } = await makeTracked(shop, { subs: 2 });
+  const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
+  await seedEvent(shop, { resourceGid: `gid://shopify/InventoryItem/${itemId}`, status: "FAILED", attempts: 1, errorCode: "network" });
+  const deps = fakeShopify((id) => SETTLED(id, 5)).deps({ sleep: noWait });
+  assert.deepEqual(await recoverInventoryEvents({ shopDomains: [shop.domain], deps }), { found: 1, processed: 1, ignored: 0, skipped: 0, failed: 0 });
+  assert.deepEqual([(await state(shop, variantGid)).restockCycle, await jobCount(shop, variantGid)], [1, 2]);
+  await recoverInventoryEvents({ shopDomains: [shop.domain], deps });
+  assert.deepEqual([(await state(shop, variantGid)).restockCycle, await jobCount(shop, variantGid)], [1, 2], "no duplicate cycle or email job");
+});
+
+test("recovery: a retriable failure is counted as failed and the event stays eligible", async () => {
+  const shop = await makeShop("rec-fail");
+  const { itemId } = await makeTracked(shop);
+  const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
+  const row = await seedEvent(shop, { resourceGid: `gid://shopify/InventoryItem/${itemId}`, status: "FAILED", attempts: 1, errorCode: "network" });
+  const deps = fakeShopify(() => { throw new Error("network down"); }).deps({ sleep: noWait });
+  const restore = console.error; console.error = () => {};
+  let summary;
+  try { summary = await recoverInventoryEvents({ shopDomains: [shop.domain], deps }); } finally { console.error = restore; }
+  assert.deepEqual(summary, { found: 1, processed: 0, ignored: 0, skipped: 0, failed: 1 });
+  const after = await prisma.webhookEvent.findUnique({ where: { id: row.id } });
+  assert.deepEqual([after.status, after.attempts], ["FAILED", 2]);
+});
+
+test("recovery: an untracked item is closed as IGNORED (not counted as processed) so it is not retried forever", async () => {
+  const shop = await makeShop("rec-untracked");
+  const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
+  const row = await seedEvent(shop, { resourceGid: "gid://shopify/InventoryItem/777000111" });
+  const deps = fakeShopify((id) => SETTLED(id, 5)).deps({ sleep: noWait });
+  assert.deepEqual(await recoverInventoryEvents({ shopDomains: [shop.domain], deps }), { found: 1, processed: 0, ignored: 1, skipped: 0, failed: 0 });
+  const after = await prisma.webhookEvent.findUnique({ where: { id: row.id } });
+  assert.deepEqual([after.status, after.errorCode], ["IGNORED", "untracked"]);
+});
+
+test("recovery: closing a row is conditional: a row claimed or finished meanwhile is left alone", async () => {
+  const shop = await makeShop("rec-race");
+  const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
+  const row = await seedEvent(shop, { resourceGid: null });
+  // another process claims the row between the recovery's read and its update
+  const realFindMany = appPrisma.webhookEvent.findMany.bind(appPrisma.webhookEvent);
+  appPrisma.webhookEvent.findMany = async (args) => {
+    const found = await realFindMany(args);
+    await prisma.webhookEvent.update({ where: { id: row.id }, data: { status: "PROCESSED", attempts: 1, processedAt: new Date() } });
+    return found;
+  };
+  const restore = quiet();
+  let summary;
+  try {
+    summary = await recoverInventoryEvents({ shopDomains: [shop.domain], deps: fakeShopify((id) => SETTLED(id)).deps({ sleep: noWait }) });
+  } finally {
+    appPrisma.webhookEvent.findMany = realFindMany;
+    restore();
+  }
+  assert.deepEqual(summary, { found: 1, processed: 0, ignored: 0, skipped: 1, failed: 0 });
+  const after = await prisma.webhookEvent.findUnique({ where: { id: row.id } });
+  assert.deepEqual([after.status, after.errorCode], ["PROCESSED", null], "the other process's result is not overwritten");
+});
+
+test("recovery: a stored ignored_invalid result is never counted as processed", async () => {
+  const shop = { id: null, domain: `not-a-shop-${RUN}` }; // unusable shop domain: the handler answers 200 ignored_invalid
+  domains.push(shop.domain);
+  const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
+  await seedEvent(shop, { resourceGid: "gid://shopify/InventoryItem/42" });
+  const restore = quiet();
+  let summary;
+  try { summary = await recoverInventoryEvents({ shopDomains: [shop.domain], deps: fakeShopify((id) => SETTLED(id)).deps({ sleep: noWait }) }); } finally { restore(); }
+  assert.deepEqual([summary.processed, summary.ignored], [0, 1]);
 });

@@ -7,7 +7,7 @@ import { describeItem, fetchCatalog } from "../models/catalog.server";
 import { WISHLIST_ACTIVITY_FILTERS, WISHLIST_SORTS } from "../utils/dashboard-constants";
 import {
   Card,
-  EVENT,
+  eventInfo,
   EmptyState,
   Grid,
   KpiCard,
@@ -160,7 +160,7 @@ export default function WishlistPage() {
                           <s-table-cell>
                             <ProductCell title={row.item.title} fallback={row.productGid ? `Product ${row.productGid.split("/").pop()}` : "Unknown product"} subtitle={row.item.variantTitle} imageUrl={row.item.imageUrl} />
                           </s-table-cell>
-                          <s-table-cell>{EVENT[row.type].label}</s-table-cell>
+                          <s-table-cell>{eventInfo(row.type).label}</s-table-cell>
                           <s-table-cell>
                             <s-link href={`shopify://admin/customers/${row.customerId}`}>
                               <span className="kv-id">Customer {row.customerId}</span>

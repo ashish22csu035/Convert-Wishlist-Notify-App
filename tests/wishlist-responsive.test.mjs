@@ -57,7 +57,9 @@ const has = (body, property, value) =>
 test("collection hearts are 44x44 touch targets that sit above a card's overlay link", () => {
   const heart = decl(".kw-btn--card");
   assert.ok(heart, "rule exists");
-  assert.ok(has(heart, "width", "44px") && has(heart, "height", "44px"));
+  // Never below 44px: with the default 22px icon the size is max(44px, 22px + 22px) = 44px, as before the icon size became a setting.
+  const size = "max(44px, calc(var(--kw-collection-page-icon-size, 22) * 1px + 22px))";
+  assert.ok(has(heart, "width", size) && has(heart, "height", size));
   assert.ok(has(heart, "position", "absolute"));
   assert.ok(has(heart, "z-index", "10"), "above Dawn-style card overlay links (z-index 1), within the card's own stacking context");
   assert.ok(has(heart, "touch-action", "manipulation"));

@@ -1,6 +1,7 @@
 /* eslint-disable react/prop-types -- plain JavaScript project: shared helper components are not given PropTypes */
 import { useEffect, useState } from "react";
-import { useBlocker, useFetcher } from "react-router";
+import { useBlocker, useFetcher, useLocation, useNavigate } from "react-router";
+import { withEmbeddedParams } from "../utils/embedded-url";
 import { FEATURE_FIELDS, isDirty } from "../utils/settings-shared";
 import { Page } from "./merchant-ui";
 import { WcSwitch, flags } from "./wc-fields";
@@ -30,6 +31,8 @@ const FEATURES = [
 
 export function SettingsForm({ settings }) {
   const fetcher = useFetcher();
+  const navigate = useNavigate();
+  const { search } = useLocation(); // the Admin context (embedded, host, shop) travels with the navigation
   const [values, setValues] = useState(settings);
   const [saved, setSaved] = useState(settings); // what the server last confirmed
 
@@ -109,6 +112,16 @@ export function SettingsForm({ settings }) {
               <s-banner tone="warning" heading={feature.offTitle}>
                 {feature.offText}
               </s-banner>
+            ) : null}
+            {feature.key === "wishlistEnabled" ? (
+              <div className="kv-form-link">
+                {/* href: inside Shopify Admin, App Bridge handles a click on an element with an href (the same mechanism as the app menu
+                    links) and moves the app there itself. onClick is the fallback when App Bridge is not running. */}
+                <s-button href="/app/wishlist-settings" onClick={() => navigate(withEmbeddedParams("/app/wishlist-settings", search))}>
+                  Wishlist Settings
+                </s-button>
+                <p>Choose the icon, colors, button style and layout of the Wishlist on your storefront.</p>
+              </div>
             ) : null}
           </section>
         ))}

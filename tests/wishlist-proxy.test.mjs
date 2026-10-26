@@ -977,7 +977,7 @@ test("features endpoint: signed, works for logged-out visitors, creates nothing,
   const unsigned = await call("/proxy/api/features", { shop: SHOP_G, signed: false });
   assert.equal(unsigned.status, 400);
   const fresh = await call("/proxy/api/features", { shop: SHOP_G });
-  assert.deepEqual([fresh.status, fresh.json], [200, { wishlist: true, notifyMe: true }], "a shop with no settings keeps both features on");
+  assert.deepEqual([fresh.status, fresh.json], [200, { wishlist: true, notifyMe: true, appearance: { version: 1 } }], "a shop with no settings keeps both features on and today's look (an empty appearance)");
   assert.equal(await prisma.shop.count({ where: { domain: SHOP_G } }), 0, "reading the switches creates nothing");
 });
 
@@ -990,7 +990,7 @@ test("Wishlist switched off: new saves, opens and clicks are refused; stored ite
   const eventsBefore = await prisma.activityEvent.count({ where: { shopId: shop.id } });
 
   await prisma.shopSettings.upsert({ where: { shopId: shop.id }, create: { shopId: shop.id, wishlistEnabled: false }, update: { wishlistEnabled: false } });
-  assert.deepEqual((await call("/proxy/api/features", { shop: SHOP_G })).json, { wishlist: false, notifyMe: true }, "only Wishlist is off");
+  assert.deepEqual((await call("/proxy/api/features", { shop: SHOP_G })).json, { wishlist: false, notifyMe: true, appearance: { version: 1 } }, "only Wishlist is off");
 
   const blocked = [
     await add(ALICE, { productId: "7000000098" }, { shop: SHOP_G }),
@@ -1024,7 +1024,70 @@ test("Notify Me switched off blocks only Notify Me writes on the server; Wishlis
   assert.deepEqual([open.status, open.json.error], [403, "feature_disabled"]);
   assert.equal(await prisma.notifySubscription.count({ where: { shopId: shop.id } }), 0);
   assert.equal((await add(ALICE, { productId: "7000000096" }, { shop: SHOP_G })).status, 200, "Wishlist is unaffected");
-  assert.deepEqual((await call("/proxy/api/features", { shop: SHOP_G })).json, { wishlist: true, notifyMe: false });
+  assert.deepEqual((await call("/proxy/api/features", { shop: SHOP_G })).json, { wishlist: true, notifyMe: false, appearance: { version: 1 } });
   await prisma.shopSettings.update({ where: { shopId: shop.id }, data: { notifyMeEnabled: true } });
   assert.equal((await notifyOpen(ALICE, { shop: SHOP_G })).status, 200, "switching on restores it");
+});
+
+// ======================= Wishlist appearance on the features endpoint =======================
+const ALLOWED_APPEARANCE_KEYS = {
+  general: ["iconType", "defaultColor", "hoverColor", "activeColor", "useThemeFonts"],
+  productPage: ["enabled", "buttonType", "position", "buttonStyle", "buttonRadius", "widthMode", "manualWidth"],
+  collectionPage: ["enabled", "iconSize", "backgroundOpacity", "position", "countDisplay"],
+  wishlistPage: ["layout", "headerIcon"],
+};
+
+test("features endpoint: appearance is added next to the unchanged switches, per shop, display settings only", async () => {
+  const shop = await prisma.shop.findUnique({ where: { domain: SHOP_G } });
+  // A hostile document written straight into the column, as a damaged row or an old version could hold it.
+  await prisma.shopSettings.update({
+    where: { shopId: shop.id },
+    data: {
+      wishlistAppearance: {
+        version: 7,
+        general: { iconType: "star", defaultColor: "#ABCDEF", hoverColor: "red", activeColor: "url(javascript:1)", secret: "leak", __proto__: { polluted: true } },
+        productPage: { enabled: false, buttonRadius: 9999, manualWidth: "300" },
+        collectionPage: { iconSize: 30, position: "bottom-left", extra: { shopId: shop.id } },
+        wishlistPage: { layout: "grid" },
+        senderName: "Hat Shop",
+        shopId: shop.id,
+        replyToEmail: "owner@example.com",
+      },
+    },
+  });
+  const response = await call("/proxy/api/features", { shop: SHOP_G });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store", "caching behaviour is unchanged");
+  assert.deepEqual(response.json, {
+    wishlist: true,
+    notifyMe: true,
+    appearance: {
+      version: 1,
+      general: { iconType: "star", defaultColor: "#abcdef" },
+      productPage: { enabled: false, manualWidth: 300 },
+      collectionPage: { iconSize: 30, position: "bottom-left" },
+      wishlistPage: { layout: "grid" },
+    },
+  }, "only valid, whitelisted values, normalized; invalid ones are dropped");
+
+  // Nothing private can be in the answer, whatever the row holds.
+  const text = JSON.stringify(response.json);
+  for (const secret of [shop.id, "Hat Shop", "owner@example.com", "leak", "polluted", SHOP_G, "gid://"]) assert.equal(text.includes(secret), false, `no "${secret}" in the public answer`);
+  const keys = Object.fromEntries(Object.entries(response.json.appearance).filter(([k]) => k !== "version").map(([k, v]) => [k, Object.keys(v)]));
+  for (const [section, names] of Object.entries(keys)) for (const name of names) assert.ok(ALLOWED_APPEARANCE_KEYS[section]?.includes(name), `${section}.${name} is a supported display setting`);
+
+  // Another shop is not affected, and an unsigned request gets no appearance at all.
+  assert.deepEqual((await call("/proxy/api/features", { shop: SHOP_F })).json, { wishlist: true, notifyMe: true, appearance: { version: 1 } });
+  const unsigned = await call("/proxy/api/features", { shop: SHOP_G, signed: false });
+  assert.equal(unsigned.status, 400);
+  assert.equal(unsigned.text.includes("appearance"), false);
+
+  // An old storefront script only reads wishlist and notifyMe: they are still plain booleans.
+  assert.deepEqual([typeof response.json.wishlist, typeof response.json.notifyMe], ["boolean", "boolean"]);
+
+  // Switching a feature off still works while an appearance is stored, and leaves the appearance alone.
+  await prisma.shopSettings.update({ where: { shopId: shop.id }, data: { wishlistEnabled: false } });
+  const off = await call("/proxy/api/features", { shop: SHOP_G });
+  assert.deepEqual([off.json.wishlist, off.json.notifyMe, off.json.appearance.general.iconType], [false, true, "star"]);
+  await prisma.shopSettings.update({ where: { shopId: shop.id }, data: { wishlistEnabled: true, wishlistAppearance: { version: 1 } } });
 });

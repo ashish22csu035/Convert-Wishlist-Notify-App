@@ -1,7 +1,9 @@
+import { useEffect } from "react";
 import { Outlet, useLoaderData, useNavigation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
+import { authResponseBoundary, setAppRendered } from "../components/merchant-ui";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
@@ -13,6 +15,10 @@ export const loader = async ({ request }) => {
 export default function App() {
   const { apiKey } = useLoaderData();
   const navigation = useNavigation();
+
+  useEffect(() => {
+    setAppRendered(true); // from now on an authentication response is a client-side navigation, not a first page load
+  }, []);
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -36,7 +42,8 @@ export default function App() {
 
 // Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  const error = useRouteError();
+  return authResponseBoundary(error) ?? boundary.error(error);
 }
 
 export const headers = (headersArgs) => {

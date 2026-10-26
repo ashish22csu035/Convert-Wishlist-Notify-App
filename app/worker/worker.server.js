@@ -27,7 +27,7 @@ export function createWorker({ intervalMs = 15000, batchSize = 10, leaseMs = DEF
     if (recover) {
       try {
         const done = await recover();
-        if (done?.found) log.log(`[worker] inventory events recovered: ${done.processed} processed, ${done.failed} still failing`);
+        if (done?.found) log.log(`[worker] inventory events recovered: ${done.processed} processed, ${done.ignored ?? 0} ignored, ${done.skipped ?? 0} skipped, ${done.failed} still failing`);
       } catch (error) {
         log.error(`[worker] inventory recovery failed: ${error?.code ?? error?.name ?? "error"}`);
       }

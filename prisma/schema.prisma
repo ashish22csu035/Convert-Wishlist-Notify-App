@@ -124,6 +124,10 @@ model ShopSettings {
   emailBody             String?  @db.Text
   buttonLabel           String?  @db.VarChar(64)
   activityRetentionDays Int      @default(180)
+  // Storefront appearance of the Wishlist (see app/utils/wishlist-appearance-shared.js). A SPARSE document:
+  // { version, general?, productPage?, collectionPage?, wishlistPage? } holding only what the merchant changed.
+  // NULL, empty or unreadable means "today's look". Saved apart from the two switches and the email columns.
+  wishlistAppearance    Json?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 

@@ -254,15 +254,58 @@ export async function recoverInventoryEvents({ limit = 25, minAgeMs = RECOVERY_M
     orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
     take: limit,
   });
-  const summary = { found: rows.length, processed: 0, failed: 0 };
+  const summary = { found: rows.length, processed: 0, ignored: 0, skipped: 0, failed: 0 };
   for (const row of rows) {
-    const itemId = String(row.resourceGid ?? "").split("/").pop();
+    const itemId = parseStoredInventoryItemId(row.resourceGid);
+    if (!itemId) {
+      // Legacy / corrupt row: there is no real inventory item to look at, so nothing may be rebuilt from it.
+      if (await retireEvent(row, "invalid_resource", now)) summary.ignored += 1;
+      else summary.skipped += 1;
+      console.warn("[restock] inventory recovery ignored event: invalid stored resource", JSON.stringify({ shop: row.shopDomain, event: row.id }));
+      continue;
+    }
     const result = await handleInventoryLevelWebhook(
       { shopDomain: row.shopDomain, topic: TOPIC, webhookId: row.webhookId, eventId: row.dedupeKey, triggeredAt: row.triggeredAt, payload: { inventory_item_id: itemId } },
       deps,
     );
-    if (result.status === 200) summary.processed += 1;
-    else summary.failed += 1;
+    // HTTP 200 only means "nothing is lost", not "processed": count by outcome.
+    switch (result.outcome) {
+      case "processed":
+        summary.processed += 1;
+        break;
+      case "ignored_variant": // the handler has already closed the row
+        summary.ignored += 1;
+        break;
+      case "duplicate":
+      case "in_progress": // finished or owned by someone else: not ours to count
+        summary.skipped += 1;
+        break;
+      case "ignored_invalid":
+      case "ignored_shop":
+      case "untracked":
+        // The handler returned before claiming the row; close it so every run does not pick it up again.
+        if (await retireEvent(row, result.outcome, now)) summary.ignored += 1;
+        else summary.skipped += 1;
+        break;
+      default: // "failed" (retry later) and "unresolved" (flagged)
+        summary.failed += 1;
+    }
   }
   return summary;
+}
+
+// Strict: only a real inventory item GID yields an id (the stored value is rebuilt into a payload).
+function parseStoredInventoryItemId(resourceGid) {
+  const match = /^gid:\/\/shopify\/InventoryItem\/([1-9][0-9]{0,19})$/.exec(String(resourceGid ?? ""));
+  return match ? match[1] : null;
+}
+
+// Closes an unrecoverable row as IGNORED, only if it is still exactly as it was read (a concurrent claim or
+// completion changes status / attempts / receivedAt, and then this does nothing). Returns whether it closed it.
+async function retireEvent(row, errorCode, now) {
+  const done = await prisma.webhookEvent.updateMany({
+    where: { id: row.id, status: row.status, attempts: row.attempts, receivedAt: row.receivedAt },
+    data: { status: "IGNORED", errorCode: errorCode.slice(0, 64), processedAt: now() },
+  });
+  return done.count === 1;
 }

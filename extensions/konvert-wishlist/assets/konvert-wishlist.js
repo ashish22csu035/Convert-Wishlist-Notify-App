@@ -8,7 +8,7 @@
   if (window.KonvertWishlist) return;
 
   var HEART_SVG =
-    '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.5-9.2C1.2 8.6 3 5.5 6.2 5.5c1.9 0 3.4 1 4.3 2.4l1.5 2 1.5-2c.9-1.4 2.4-2.4 4.3-2.4 3.2 0 5 3.1 3.7 6.3C19.5 16.4 12 21 12 21z"/></svg>';
+    '<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path class="kw-i-heart" d="M12 21s-7.5-4.6-9.5-9.2C1.2 8.6 3 5.5 6.2 5.5c1.9 0 3.4 1 4.3 2.4l1.5 2 1.5-2c.9-1.4 2.4-2.4 4.3-2.4 3.2 0 5 3.1 3.7 6.3C19.5 16.4 12 21 12 21z"/><path class="kw-i-star" d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/><path class="kw-i-bookmark" d="M6 3h12v18l-6-4.5L6 21z"/></svg>';
 
   var config = readConfig();
   var kw = {
@@ -137,6 +137,7 @@
 
     loadFeatures().then(function (features) {
       applyFeatures(features);
+      applyAppearance(features && features.appearance, true);
       injectHearts(document);
 
       var needsExtras =
@@ -159,13 +160,16 @@
   // Which features the merchant has switched on (the server enforces the same switches on every write).
   // Kept for a minute per browser tab so pages do not each wait for it; if it cannot be read, nothing is hidden.
   var FEATURES_KEY = 'kw:features';
-  function loadFeatures() {
+  function readCache() {
     try {
-      var cached = JSON.parse(window.sessionStorage.getItem(FEATURES_KEY) || 'null');
-      if (cached && Date.now() - cached.t < 60000) return Promise.resolve(cached.v);
+      return JSON.parse(window.sessionStorage.getItem(FEATURES_KEY) || 'null');
     } catch (error) {
-      /* storage unavailable or damaged: ask the server */
+      return null; /* storage unavailable or damaged */
     }
+  }
+  function loadFeatures() {
+    var cached = readCache();
+    if (cached && cached.v && Date.now() - cached.t < 60000) return Promise.resolve(cached.v);
     if (!config.featuresPath) return Promise.resolve(null);
     return fetch(config.featuresPath, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
       .then(function (response) {
@@ -173,7 +177,7 @@
       })
       .then(function (json) {
         if (!json || typeof json !== 'object') return null;
-        var value = { wishlist: json.wishlist !== false, notifyMe: json.notifyMe !== false };
+        var value = { wishlist: json.wishlist !== false, notifyMe: json.notifyMe !== false, appearance: json.appearance && typeof json.appearance === 'object' ? json.appearance : null };
         try {
           window.sessionStorage.setItem(FEATURES_KEY, JSON.stringify({ t: Date.now(), v: value }));
         } catch (error) {
@@ -196,6 +200,46 @@
     }
     if (features.notifyMe === false) config.notifyEnabled = false;
   }
+
+  // Wishlist Settings (sparse: only what the merchant changed). Words and on/off become data-kw-<section>-<key> attributes
+  // on <html>, numbers and colours --kw-<section>-<key> variables; the CSS gives them meaning. `final` also applies the
+  // two switches that change behaviour, not looks.
+  var applied = [];
+  var WORD = /^[A-Za-z]{1,30}$/;
+  function applyAppearance(a, final) {
+    var root = document.documentElement;
+    applied.forEach(function (name) {
+      if (name.indexOf('--') === 0) root.style.removeProperty(name);
+      else root.removeAttribute(name);
+    });
+    applied = [];
+    if (!a || typeof a !== 'object') return;
+    Object.keys(a).forEach(function (section) {
+      var part = a[section];
+      if (!part || typeof part !== 'object' || !WORD.test(section)) return;
+      Object.keys(part).forEach(function (key) {
+        var value = part[key];
+        if (!WORD.test(key)) return;
+        var name = ('kw-' + section + '-' + key).replace(/[A-Z]/g, function (l) { return '-' + l.toLowerCase(); });
+        var num = typeof value === 'number' && isFinite(value) && Math.abs(value) <= 10000;
+        var text = typeof value === 'string';
+        if (num || (text && /^#[0-9a-f]{6}$/i.test(value))) {
+          root.style.setProperty('--' + name, String(value));
+          applied.push('--' + name);
+        }
+        if (num || typeof value === 'boolean' || (text && /^[a-z_-]{1,16}$/.test(value))) {
+          root.setAttribute('data-' + name, String(value));
+          applied.push('data-' + name);
+        }
+      });
+    });
+    if (final) {
+      if ((a.collectionPage || {}).enabled === false) config.collectionCards = false;
+      if ((a.wishlistPage || {}).headerIcon === false) config.headerIcon = false;
+    }
+  }
+  var early = readCache(); // last known look first: no flash of the default one
+  if (early && early.v) applyAppearance(early.v.appearance);
 
   window.KonvertWishlist = kw;
 

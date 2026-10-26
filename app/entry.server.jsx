@@ -8,6 +8,7 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { safeErrorSummary } from "./utils/storefront-auth.server";
+import { traceAppRequest } from "./utils/nav-trace.server";
 
 export const streamTimeout = 5000;
 
@@ -30,6 +31,7 @@ export default async function handleRequest(
           const stream = createReadableStreamFromReadable(body);
 
           responseHeaders.set("Content-Type", "text/html");
+          traceAppRequest(request, { status: responseStatusCode, headers: responseHeaders }); // TEMPORARY, see utils/nav-trace.server.js
           resolve(
             new Response(stream, {
               headers: responseHeaders,
@@ -73,4 +75,11 @@ export function handleError(error, { request }) {
   } catch {
     /* diagnostics only */
   }
+}
+
+// TEMPORARY diagnostics (see utils/nav-trace.server.js): every client-side route-data request (/app/....data) is traced with
+// what it carried and how it was answered. The response is returned untouched.
+export function handleDataRequest(response, { request }) {
+  traceAppRequest(request, response);
+  return response;
 }

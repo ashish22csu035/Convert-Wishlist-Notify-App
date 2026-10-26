@@ -85,7 +85,7 @@ test("KPI cards stay two to a row on a phone, switch cards take the row, and onl
 
 test("overflow is never hidden to cover a layout problem; the chart scrolls inside its own box", () => {
   assert.equal(/overflow-x:\s*hidden/.test(css), false);
-  assert.equal(/\boverflow:\s*hidden/.test(base.replace(/\.kv-product-title[^}]*\}/g, "").replace(/\.kv-thumb[^}]*\}/g, "").replace(/\.kv-sr[^}]*\}/g, "")), false, "no blanket overflow: hidden (only the thumbnail, the ellipsis title and the screen-reader text clip)");
+  assert.equal(/\boverflow:\s*hidden/.test(base.replace(/\.kv-product-title[^}]*\}/g, "").replace(/\.kv-thumb[^}]*\}/g, "").replace(/\.kv-sr[^}]*\}/g, "").replace(/\.kv-pv-(?:stage|device)[^}]*\}/g, "")), false, "no blanket overflow: hidden (only the thumbnail, the ellipsis title, the screen-reader text and the Wishlist Settings preview viewport clip; the preview's content scrolls inside its own frame)");
   assert.match(phone.body, /\.kv-chart-scroll \{\s*overflow-x: auto;/);
   assert.match(phone.body, /\.kv-chart \{\s*min-width: 520px;/);
   assert.match(phone.body, /\.kv-chart text \{\s*font-size: 12px;/, "axis labels stay readable at the scaled size");

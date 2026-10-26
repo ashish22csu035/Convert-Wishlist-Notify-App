@@ -1,8 +1,49 @@
+/* Wishlist Settings (Settings > Wishlist Settings in the app) reach this file as attributes and variables on <html>,
+   set by konvert-wishlist.js, e.g. data-kw-general-icon-type="star" or --kw-collection-page-icon-size. None of them
+   exist on a store that has not customised anything, and every rule below falls back to the original value.
+   Colour order: the colour saved in the app, else the theme editor's "Heart color" (--kw-accent), else #d6336c. */
 .kw-heart {
   display: inline-flex;
   width: 1.25em;
   height: 1.25em;
-  color: var(--kw-accent, #d6336c);
+  color: var(--kw-general-default-color, var(--kw-accent, #d6336c));
+}
+
+/* Icon type: the SVG holds all three shapes and only one is shown. */
+.kw-i-star,
+.kw-i-bookmark {
+  display: none;
+}
+
+html[data-kw-general-icon-type='star'] .kw-i-heart,
+html[data-kw-general-icon-type='bookmark'] .kw-i-heart {
+  display: none;
+}
+
+html[data-kw-general-icon-type='star'] .kw-i-star,
+html[data-kw-general-icon-type='bookmark'] .kw-i-bookmark {
+  display: inline;
+}
+
+/* Hover colour, then the saved-state colour (later, so a saved heart keeps its own colour under the pointer). */
+.kw-btn:hover > .kw-heart,
+.kw-header-icon:hover > .kw-heart {
+  color: var(--kw-general-hover-color, var(--kw-general-default-color, var(--kw-accent, #d6336c)));
+}
+
+.kw-btn[aria-pressed='true'] > .kw-heart,
+.kw-header-icon.kw-header-icon--filled > .kw-heart {
+  color: var(--kw-general-active-color, var(--kw-general-default-color, var(--kw-accent, #d6336c)));
+}
+
+/* "Use theme fonts" switched off: a plain system font stack instead of the theme's fonts. */
+html[data-kw-general-use-theme-fonts='false'] .kw-btn,
+html[data-kw-general-use-theme-fonts='false'] .kw-page,
+html[data-kw-general-use-theme-fonts='false'] .kw-page *,
+html[data-kw-general-use-theme-fonts='false'] .kw-toast,
+html[data-kw-general-use-theme-fonts='false'] .kw-toast *,
+html[data-kw-general-use-theme-fonts='false'] .kw-header-icon__count {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 .kw-heart svg {
@@ -65,6 +106,55 @@
   overflow-wrap: anywhere;
 }
 
+/* Product page button. WHERE the block sits (for example under Add to cart) is set in the theme editor. */
+html[data-kw-product-page-enabled='false'] .kw-block {
+  display: none !important;
+}
+
+/* Icon only: the label stays for screen readers (its text still says Add to / Saved to wishlist). */
+html[data-kw-product-page-button-type='icon'] .kw-btn--product .kw-btn__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+  clip: rect(0 0 0 0);
+}
+
+html[data-kw-product-page-position='center'] .kw-block {
+  text-align: center;
+}
+
+html[data-kw-product-page-position='right'] .kw-block {
+  text-align: right;
+}
+
+html[data-kw-product-page-width-mode='auto'] .kw-btn--product {
+  width: auto;
+}
+
+html[data-kw-product-page-width-mode='manual'] .kw-btn--product {
+  width: min(calc(var(--kw-product-page-manual-width, 240) * 1px), 100%);
+}
+
+html[data-kw-product-page-button-radius] .kw-btn--product {
+  border-radius: calc(var(--kw-product-page-button-radius) * 1px);
+}
+
+html[data-kw-product-page-button-style='filled'] .kw-btn--product {
+  color: #fff;
+  background: var(--kw-general-default-color, var(--kw-accent, #d6336c));
+  border-color: var(--kw-general-default-color, var(--kw-accent, #d6336c));
+}
+
+html[data-kw-product-page-button-style='filled'] .kw-btn--product .kw-heart {
+  color: #fff;
+}
+
+html[data-kw-product-page-button-style='filled'] .kw-btn--product:hover {
+  opacity: 0.9;
+}
+
 .kw-btn--loading {
   cursor: progress;
 }
@@ -85,11 +175,12 @@
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  width: 44px;
-  height: 44px;
+  /* 44px (the touch target) unless a larger icon needs a larger button. 22px icon + 22px = today's 44px. */
+  width: max(44px, calc(var(--kw-collection-page-icon-size, 22) * 1px + 22px));
+  height: max(44px, calc(var(--kw-collection-page-icon-size, 22) * 1px + 22px));
   padding: 0;
   margin: 0;
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, calc(var(--kw-collection-page-background-opacity, 92) / 100));
   border: 0;
   border-radius: 50%;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
@@ -98,8 +189,42 @@
 }
 
 .kw-btn--card .kw-heart {
-  width: 22px;
-  height: 22px;
+  width: calc(var(--kw-collection-page-icon-size, 22) * 1px);
+  height: calc(var(--kw-collection-page-icon-size, 22) * 1px);
+}
+
+/* Collection page: on/off, corner, fully clear background (no shadow either), and the header count badge. */
+html[data-kw-collection-page-enabled='false'] .kw-btn--card {
+  display: none !important;
+}
+
+html[data-kw-collection-page-position='top-left'] .kw-btn--card {
+  right: auto;
+  left: 8px;
+}
+
+html[data-kw-collection-page-position='bottom-left'] .kw-btn--card {
+  top: auto;
+  right: auto;
+  bottom: 8px;
+  left: 8px;
+}
+
+html[data-kw-collection-page-position='bottom-right'] .kw-btn--card {
+  top: auto;
+  bottom: 8px;
+}
+
+html[data-kw-collection-page-background-opacity='0'] .kw-btn--card {
+  box-shadow: none;
+}
+
+html[data-kw-collection-page-count-display='none'] .kw-header-icon__count {
+  display: none !important;
+}
+
+html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
+  display: none !important;
 }
 
 .kw-header-icon {
@@ -141,7 +266,7 @@
   line-height: 18px;
   text-align: center;
   color: #fff;
-  background: var(--kw-accent, #d6336c);
+  background: var(--kw-general-default-color, var(--kw-accent, #d6336c));
   border-radius: 9px;
 }
 
@@ -171,7 +296,7 @@
 
 .kw-toast a {
   font-weight: 600;
-  color: var(--kw-accent, #d6336c);
+  color: var(--kw-general-default-color, var(--kw-accent, #d6336c));
 }
 
 .kw-toast button {
@@ -861,6 +986,116 @@
   .kw-td--price {
     width: 160px;
   }
+}
+
+/* Wishlist page as a grid (Wishlist Settings > Wishlist page > Layout). The page script always builds the same
+   table; here its rows are laid out as cards at every width, the way the table already collapses on a phone. */
+html[data-kw-wishlist-page-layout='grid'] .kw-table-wrap {
+  overflow-x: visible;
+  border: 0;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-table {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-table thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-table tbody {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 20px;
+  width: 100%;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-areas:
+    'img img'
+    'name rm'
+    'price price'
+    'stock stock'
+    'qty qty'
+    'act act';
+  align-content: start;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 12px;
+  border: 1px solid var(--kw-line);
+  border-radius: 8px;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-td {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-td--image {
+  grid-area: img;
+  width: auto;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-td--name {
+  grid-area: name;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-td--remove {
+  grid-area: rm;
+  align-self: start;
+  justify-self: end;
+  width: auto;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-td--price {
+  grid-area: price;
+  width: auto;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-td--stock {
+  grid-area: stock;
+  width: auto;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-td--qty {
+  grid-area: qty;
+  width: auto;
+  margin-top: 6px;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-td--action {
+  grid-area: act;
+  width: auto;
+  margin-top: 6px;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-th--select {
+  display: none;
+}
+
+html[data-kw-wishlist-page-layout='grid'] .kw-table--select .kw-td--select {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 1;
+  display: block;
+  width: auto;
 }
 
 /* Wishlist switched off by the merchant (Settings): nothing of it is shown. */
