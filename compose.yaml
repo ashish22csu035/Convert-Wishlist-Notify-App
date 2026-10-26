@@ -31,10 +31,11 @@ services:
       start_period: 20s
 
   worker:
+    # Same image as web (built once by the web service), so `up --build` does not build it twice.
     image: konvert-wishlist-notify:local
-    build:
-      context: .
-      dockerfile: Dockerfile
+    pull_policy: never
+    depends_on:
+      - web
 
     env_file:
       - .env.runtime
