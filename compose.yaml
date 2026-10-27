@@ -1,24 +1,46 @@
+cat > compose.yaml <<'EOF'
 services:
+  db:
+    image: mysql:8.4
+    env_file:
+      - .env.db
+    command:
+      - --innodb-buffer-pool-size=96M
+      - --max-connections=20
+      - --performance-schema=OFF
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mysqladmin ping -h 127.0.0.1 -uroot -p"$${MYSQL_ROOT_PASSWORD}" --silent'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
   web:
     image: konvert-wishlist-notify:local
     build:
       context: .
       dockerfile: Dockerfile
-
     env_file:
       - .env.runtime
-
     environment:
       NODE_ENV: production
       HOST: "0.0.0.0"
       PORT: "3000"
-
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:3000:3000"
-
     restart: unless-stopped
     init: true
-
     healthcheck:
       test:
         - CMD
@@ -31,23 +53,19 @@ services:
       start_period: 20s
 
   worker:
-    # Same image as web (built once by the web service), so `up --build` does not build it twice.
     image: konvert-wishlist-notify:local
-    pull_policy: never
-    depends_on:
-      - web
-
+    build:
+      context: .
+      dockerfile: Dockerfile
     env_file:
       - .env.runtime
-
     environment:
       NODE_ENV: production
       WORKER_SKIP_DOTENV: "1"
-
-    # Always-on scheduler: starts the one-shot worker every 10 minutes (app/worker/cron.js).
-    # A single run by hand: docker compose run --rm worker npm run worker
+    depends_on:
+      db:
+        condition: service_healthy
     command: ["node", "app/worker/cron.js"]
-
     restart: unless-stopped
     init: true
     stop_grace_period: 50s
@@ -57,17 +75,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-
     env_file:
       - .env.runtime
-
     environment:
       NODE_ENV: production
-
+    depends_on:
+      db:
+        condition: service_healthy
     command: ["./node_modules/.bin/prisma", "migrate", "deploy"]
-
-    # Only run this service deliberately during deployment.
     profiles:
       - operations
-
     restart: "no"
+
+volumes:
+  mysql_data:
+EOF
