@@ -26,6 +26,23 @@ const CUSTOMER_QUERY = `#graphql
   }
 `;
 
+// Shopify's own "too fast" signals, as the installed @shopify/shopify-api throws them (it never retries by itself:
+// the app passes no `tries`):
+//   - HTTP 429            HttpThrottlingError, response.code 429, response.retryAfter in SECONDS (Retry-After header)
+//   - GraphQL THROTTLED   a 200 answer with errors[].extensions.code "THROTTLED"; thrown as GraphqlQueryError
+//                         (body.errors.graphQLErrors), or seen as a plain errors array in an answer
+// Returns { retryAfterMs } (null when Shopify gave no wait) for a throttle, or null for anything else.
+const MAX_RETRY_AFTER_MS = 5 * 60 * 1000;
+function throttleOf(source) {
+  const graphQLErrors = Array.isArray(source) ? source : source?.body?.errors?.graphQLErrors;
+  if (Array.isArray(graphQLErrors) && graphQLErrors.some((item) => item?.extensions?.code === "THROTTLED")) return { retryAfterMs: null };
+  if (!Array.isArray(source) && source?.response?.code === 429) {
+    const seconds = Number(source.response.retryAfter);
+    return { retryAfterMs: Number.isFinite(seconds) && seconds > 0 ? Math.min(Math.ceil(seconds * 1000), MAX_RETRY_AFTER_MS) : null };
+  }
+  return null;
+}
+
 // Thrown for every reason the Admin API cannot give us what we need. `code` is
 // the safe, customer-facing error code; nothing from Shopify's response is kept.
 export class LookupError extends Error {
@@ -34,6 +51,19 @@ export class LookupError extends Error {
     this.code = code;
     this.status = status;
   }
+}
+
+// "Shopify could not be reached", with a throttle marked on it when that is the reason. The code and status stay the
+// same either way (callers and the storefront see no difference); `throttled` and `retryAfterMs` are for the
+// background paths that decide when to try again.
+function shopUnavailable(source) {
+  const error = new LookupError("shop_unavailable", 503);
+  const throttle = throttleOf(source);
+  if (throttle) {
+    error.throttled = true;
+    error.retryAfterMs = throttle.retryAfterMs;
+  }
+  return error;
 }
 
 // Customer email needs read_customers AND Shopify's protected customer data
@@ -57,8 +87,8 @@ async function run(admin, query, variables) {
   try {
     const response = await admin.graphql(query, { variables });
     return await response.json();
-  } catch {
-    throw new LookupError("shop_unavailable", 503);
+  } catch (error) {
+    throw shopUnavailable(error);
   }
 }
 
@@ -67,7 +97,7 @@ async function run(admin, query, variables) {
 // needs, and whether the variant is currently unavailable for sale.
 export async function fetchVariantForNotify(admin, variantGid) {
   const json = await run(admin, VARIANT_QUERY, { id: variantGid });
-  if (json.errors?.length) throw new LookupError("shop_unavailable", 503);
+  if (json.errors?.length) throw shopUnavailable(json.errors);
   const node = json.data?.node;
   if (!node?.id || node.id !== variantGid || !node.product?.id || !node.inventoryItem?.id) {
     throw new LookupError("variant_not_found", 404);
@@ -143,6 +173,8 @@ export async function fetchStockTopology(admin, variantGid) {
     ]);
     const levels = levelsJson?.data?.node?.inventoryItem?.inventoryLevels;
     const services = servicesJson?.data?.shop?.fulfillmentServices;
+    const throttledErrors = [levelsJson?.errors, servicesJson?.errors].find((errors) => throttleOf(errors));
+    if (throttledErrors) throw shopUnavailable(throttledErrors);
     if (levelsJson?.errors?.length || servicesJson?.errors?.length || !levels || !Array.isArray(levels.nodes) || !Array.isArray(services) || levels.pageInfo?.hasNextPage) {
       return { thirdPartyOnly: null };
     }
@@ -150,7 +182,10 @@ export async function fetchStockTopology(admin, variantGid) {
     if (!stocked.length) return { thirdPartyOnly: null };
     const thirdParty = new Set(services.filter((service) => service?.type === "THIRD_PARTY" && service.location?.id).map((service) => service.location.id));
     return { thirdPartyOnly: stocked.every((level) => thirdParty.has(level.location?.id)) };
-  } catch {
+  } catch (error) {
+    // A throttled read is not "stock unknown": it must not let Admin's word alone confirm a restock. Fail the event so it is retried.
+    if (error instanceof LookupError && error.throttled) throw error;
+    if (throttleOf(error)) throw shopUnavailable(error);
     return { thirdPartyOnly: null };
   }
 }
@@ -176,7 +211,7 @@ export async function fetchCustomerEmail(admin, customerGid) {
   const json = await run(admin, CUSTOMER_QUERY, { id: customerGid });
   if (json.errors?.length) {
     const denied = json.errors.some((error) => error?.extensions?.code === "ACCESS_DENIED");
-    throw new LookupError(denied ? "customer_data_unavailable" : "shop_unavailable", denied ? 403 : 503);
+    throw denied ? new LookupError("customer_data_unavailable", 403) : shopUnavailable(json.errors);
   }
   const customer = json.data?.customer;
   if (!customer?.id) throw new LookupError("customer_not_found", 404);
@@ -204,7 +239,7 @@ const EMAIL_PRODUCT_QUERY = `#graphql
 // or variant_not_found (the variant or product is gone: nothing to send).
 export async function fetchProductForEmail(admin, variantGid) {
   const json = await run(admin, EMAIL_PRODUCT_QUERY, { id: variantGid });
-  if (json.errors?.length) throw new LookupError("shop_unavailable", 503);
+  if (json.errors?.length) throw shopUnavailable(json.errors);
   const node = json.data?.node;
   if (!node?.id || node.id !== variantGid || !node.product) throw new LookupError("variant_not_found", 404);
   return {

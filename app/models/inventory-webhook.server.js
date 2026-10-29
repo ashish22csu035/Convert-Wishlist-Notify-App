@@ -37,6 +37,34 @@ export function parseInventoryItemGid(payload) {
   return /^[1-9][0-9]{0,19}$/.test(text) ? `gid://shopify/InventoryItem/${text}` : null;
 }
 
+// Admin GraphQL accounting for ONE event (measurement only, it changes nothing about the requests). Every request
+// made through the wrapped admin counts, retries and repeated reads included, whether it resolves or throws. Time is
+// the wait for each request's response; requests that overlap (the two topology reads) are summed, so the total can
+// exceed the wall-clock time. Database queries, sleeps and storefront HTTP requests never go through admin.graphql.
+// The meter is created per handler call, so concurrent events cannot mix their numbers.
+const graphqlKindOf = (query) => /\b(?:query|mutation)\s+([A-Za-z_]\w*)/.exec(String(query ?? ""))?.[1] ?? "unknown";
+
+export function createGraphqlMeter(clock = () => performance.now()) {
+  const calls = [];
+  let totalMs = 0;
+  return {
+    wrap: (admin) => ({
+      ...admin,
+      async graphql(query, options) {
+        const started = clock();
+        try {
+          return await admin.graphql(query, options);
+        } finally {
+          const ms = clock() - started;
+          totalMs += ms;
+          calls.push({ kind: graphqlKindOf(query), ms: Math.round(ms * 10) / 10 });
+        }
+      },
+    }),
+    snapshot: () => ({ graphqlCount: calls.length, graphqlMs: Math.round(totalMs * 10) / 10, graphqlCalls: [...calls] }),
+  };
+}
+
 const normalizeTopic = (topic) => String(topic ?? "").toUpperCase().replace(/[/.]/g, "_");
 
 // Returns { event } when this delivery owns the work, or { skip: "duplicate" | "in_progress" }.
@@ -76,12 +104,74 @@ async function claimEvent({ shopDomain, shopId, key, webhookId, itemGid, trigger
   return { skip: "in_progress" };
 }
 
-const errorCodeOf = (error) => String(error?.code ?? error?.name ?? "error").slice(0, 64);
+export const THROTTLED_CODE = "shopify_throttled";
+const errorCodeOf = (error) => (error?.throttled ? THROTTLED_CODE : String(error?.code ?? error?.name ?? "error").slice(0, 64));
+
+// Per-shop cool-down after Shopify throttled us. While a shop cools down, no inventory event of that shop asks the
+// Admin API (neither a live webhook nor recovery), and the event is deferred: it spends no attempt, is never marked
+// finished, and stays eligible for the next delivery or recovery run after the cool-down.
+// Limitations: the state is in this process's memory only. A restart forgets it, and the web server and the worker are
+// separate processes that do not see each other's cool-downs. The worst case is one extra throttled request per
+// process, which is what happened before this existed.
+// How long: Shopify's Retry-After, never more than 5 minutes; 1 minute when it gave none (or an unusable value).
+export const COOLDOWN_DEFAULT_MS = 60 * 1000;
+export const COOLDOWN_MAX_MS = 5 * 60 * 1000;
+const cooldowns = new Map(); // shop domain -> epoch ms until which Shopify is not asked
+
+export function cooldownMsOf(retryAfterMs) {
+  const ms = Number(retryAfterMs);
+  if (Number.isNaN(ms) || ms <= 0) return COOLDOWN_DEFAULT_MS;
+  return Math.min(ms, COOLDOWN_MAX_MS);
+}
+
+export function startShopCooldown(shopDomain, retryAfterMs, nowMs = Date.now()) {
+  const until = nowMs + cooldownMsOf(retryAfterMs);
+  if (until > (cooldowns.get(shopDomain) ?? 0)) cooldowns.set(shopDomain, until); // a cool-down is never shortened
+}
+
+// The epoch ms the shop cools down until, or null when it does not (an expired entry is dropped).
+function coolingUntil(shopDomain, nowMs) {
+  const until = cooldowns.get(shopDomain);
+  if (until === undefined) return null;
+  if (until <= nowMs) {
+    cooldowns.delete(shopDomain);
+    return null;
+  }
+  return until;
+}
+
+// Forgets every cool-down (tests, or an operator who knows Shopify has recovered).
+export const clearShopCooldowns = () => cooldowns.clear();
+
+// A delivery arrives for a cooling shop and has no row yet: keep it as FAILED with 0 attempts so the recovery run can
+// replay it after the cool-down (Shopify's own redeliveries are few and short). Nothing is claimed, so there is no lease.
+async function deferNewEvent(data, nowMs) {
+  try {
+    await prisma.webhookEvent.create({ data: { ...data, status: "FAILED", attempts: 0, errorCode: THROTTLED_CODE } });
+    return { status: 503, outcome: "deferred" };
+  } catch (error) {
+    if (error?.code !== "P2002") throw error;
+  }
+  const existing = await prisma.webhookEvent.findUnique({ where: { shopDomain_topic_dedupeKey: { shopDomain: data.shopDomain, topic: TOPIC, dedupeKey: data.dedupeKey } } });
+  // The same answers as claimEvent: finished work is a duplicate, work another delivery is doing is its own to answer.
+  if (existing?.status === "PROCESSED" || existing?.status === "IGNORED") return { status: 200, outcome: "duplicate" };
+  if (existing?.status === "RECEIVED" && existing.receivedAt.getTime() >= nowMs - LEASE_MS) return { status: 200, outcome: "in_progress" };
+  return { status: 503, outcome: "deferred" }; // a FAILED row (or an abandoned claim) is left exactly as it is
+}
+
+// The shop started cooling down after this delivery had claimed its event: give the claim back, and the attempt it
+// took. Only a row still exactly as this claim left it is touched (another claimant would have raised attempts).
+async function releaseClaim(event) {
+  await prisma.webhookEvent.updateMany({
+    where: { id: event.id, status: "RECEIVED", attempts: event.attempts },
+    data: { status: "FAILED", errorCode: THROTTLED_CODE, attempts: { decrement: 1 } },
+  });
+}
 
 // Returns { status, outcome, results? }. `status` is the HTTP status to answer with:
 // 200 = handled or safely ignored (nothing is lost), 503 = failed, Shopify should retry.
 export async function handleInventoryLevelWebhook(input, deps = {}) {
-  const { getAdmin = getShopAdmin, restock = processRestock, now = () => new Date(), sleep = defaultSleep, purchasable = resolveStorefrontPurchasable } = deps;
+  const { getAdmin = getShopAdmin, restock = processRestock, now = () => new Date(), sleep = defaultSleep, purchasable = resolveStorefrontPurchasable, clock } = deps;
 
   const shopDomain = toShopDomain(input.shopDomain);
   const key = String(input.eventId || input.webhookId || "").trim();
@@ -104,21 +194,44 @@ export async function handleInventoryLevelWebhook(input, deps = {}) {
   if (!tracked.length) return { status: 200, outcome: "untracked" };
 
   const triggered = input.triggeredAt ? new Date(input.triggeredAt) : null;
-  const claim = await claimEvent({
+  const eventData = {
     shopDomain,
     shopId: shop.id,
-    key,
+    topic: TOPIC,
+    dedupeKey: key,
     webhookId: String(input.webhookId ?? key).slice(0, 191),
-    itemGid,
+    resourceGid: itemGid,
     triggeredAt: triggered && !Number.isNaN(triggered.getTime()) ? triggered : null,
-  });
+  };
+  const logDeferred = (until) =>
+    console.log("[restock] inventory event deferred", JSON.stringify({ shop: shopDomain, event: key, item: itemGid.split("/").pop(), reason: "shopify_cooldown", retryInMs: until - now().getTime() }));
+
+  // Shopify is throttling this shop: do not ask it again yet (see the cool-down notes above).
+  const coolingBefore = coolingUntil(shopDomain, now().getTime());
+  if (coolingBefore) {
+    const deferred = await deferNewEvent(eventData, now().getTime());
+    if (deferred.outcome === "deferred") logDeferred(coolingBefore);
+    return deferred;
+  }
+
+  const claim = await claimEvent({ shopDomain, shopId: shop.id, key, webhookId: eventData.webhookId, itemGid, triggeredAt: eventData.triggeredAt });
   // A duplicate of finished work is acknowledged. One still being worked on by another delivery is
   // acknowledged too: if that one fails it answers 5xx itself and Shopify retries it.
   if (claim.skip) return { status: 200, outcome: claim.skip };
 
+  // Another event may have been throttled while this one was being claimed.
+  const coolingAfter = coolingUntil(shopDomain, now().getTime());
+  if (coolingAfter) {
+    await releaseClaim(claim.event);
+    logDeferred(coolingAfter);
+    return { status: 503, outcome: "deferred" };
+  }
+
+  const meter = createGraphqlMeter(clock);
   try {
     const observedAt = now(); // BEFORE asking Shopify, so a slower read can never look newer than a later one
-    const { admin } = await getAdmin(shopDomain);
+    const { admin: shopAdmin } = await getAdmin(shopDomain);
+    const admin = meter.wrap(shopAdmin);
     const results = [];
     for (const { variantGid } of tracked) {
       let variant;
@@ -152,7 +265,7 @@ export async function handleInventoryLevelWebhook(input, deps = {}) {
         if (verdict.purchasable === null) {
           // Cannot be confirmed: no state change, no job, nothing to retry (a retry would read the same thing).
           results.push("storefront_unconfirmed");
-          console.log("[restock] inventory event", JSON.stringify({ shop: shopDomain, event: key, item: itemGid.split("/").pop(), variant: variantGid.split("/").pop(), state: variant.state, seen: variant.seen ?? null, outcome: "storefront_unconfirmed", basis: verdict.basis }));
+          console.log("[restock] inventory event", JSON.stringify({ shop: shopDomain, event: key, item: itemGid.split("/").pop(), variant: variantGid.split("/").pop(), state: variant.state, seen: variant.seen ?? null, outcome: "storefront_unconfirmed", basis: verdict.basis, ...meter.snapshot() }));
           continue;
         }
         if (verdict.purchasable === false) inStock = false;
@@ -174,6 +287,8 @@ export async function handleInventoryLevelWebhook(input, deps = {}) {
           outcome: result.outcome,
           cycleAfter: result.restockCycle ?? null,
           jobsCreated: result.jobsCreated ?? null,
+          // Admin GraphQL requests of this EVENT so far (all its variants up to this one); the last line of an event is its total.
+          ...meter.snapshot(),
         }),
       );
       // Diagnostics (same file as the proxy trace): what Shopify answered for this event and
@@ -205,6 +320,7 @@ export async function handleInventoryLevelWebhook(input, deps = {}) {
     return { status: 200, outcome: nothingToDo ? "ignored_variant" : "processed", results };
   } catch (error) {
     const code = errorCodeOf(error);
+    if (error?.throttled) startShopCooldown(shopDomain, error.retryAfterMs, now().getTime());
     const attempt = claim.event.attempts;
     const exhausted = attempt >= MAX_EVENT_ATTEMPTS;
     console.error(
@@ -217,6 +333,8 @@ export async function handleInventoryLevelWebhook(input, deps = {}) {
         reason: code,
         seen: error?.seen ?? null,
         decision: exhausted ? "flagged_unresolved" : "retry",
+        throttled: error?.throttled === true,
+        ...meter.snapshot(),
       }),
     );
     try {
@@ -229,7 +347,10 @@ export async function handleInventoryLevelWebhook(input, deps = {}) {
     }
     // Exhausted: answer 200 so Shopify stops redelivering (repeated failures can get the webhook removed).
     // The FAILED / inventory_unresolved row and the error line above are the visible flag.
-    return exhausted ? { status: 200, outcome: "unresolved" } : { status: 503, outcome: "failed" };
+    // A throttled event is still a plain failure for Shopify (503, redelivered later); the outcome only tells the
+    // recovery loop that Shopify is rate limiting, so it stops asking instead of spending every event's attempts.
+    if (exhausted) return { status: 200, outcome: "unresolved" };
+    return { status: 503, outcome: error?.throttled ? "throttled" : "failed" };
   }
 }
 
@@ -254,8 +375,10 @@ export async function recoverInventoryEvents({ limit = 25, minAgeMs = RECOVERY_M
     orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
     take: limit,
   });
-  const summary = { found: rows.length, processed: 0, ignored: 0, skipped: 0, failed: 0 };
+  const summary = { found: rows.length, processed: 0, ignored: 0, skipped: 0, failed: 0 }; // + throttled / deferred, only when Shopify rate limited or a shop is cooling down
   for (const row of rows) {
+    // Shopify answered "too fast": the rest of this batch stays as it is (no attempt spent) for a later run.
+    if (summary.throttled) break;
     const itemId = parseStoredInventoryItemId(row.resourceGid);
     if (!itemId) {
       // Legacy / corrupt row: there is no real inventory item to look at, so nothing may be rebuilt from it.
@@ -286,6 +409,13 @@ export async function recoverInventoryEvents({ limit = 25, minAgeMs = RECOVERY_M
         // The handler returned before claiming the row; close it so every run does not pick it up again.
         if (await retireEvent(row, result.outcome, now)) summary.ignored += 1;
         else summary.skipped += 1;
+        break;
+      case "throttled": // retry later, and stop this batch (see the top of the loop)
+        summary.failed += 1;
+        summary.throttled = 1;
+        break;
+      case "deferred": // the shop is cooling down: nothing was asked, no attempt spent, the event waits for a later run
+        summary.deferred = (summary.deferred ?? 0) + 1;
         break;
       default: // "failed" (retry later) and "unresolved" (flagged)
         summary.failed += 1;

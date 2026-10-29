@@ -12,8 +12,9 @@
 //     client, to cover the restock logic. The Admin answers are invented by the tests.
 // All rows belong to uniquely named test shops and their WebhookEvent rows; only those are deleted.
 import "./helpers/resolve-extensionless.mjs";
-import { test, before, after } from "node:test";
+import { test, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
+import { GraphqlQueryError, HttpInternalError, HttpRequestError, HttpResponseError, HttpThrottlingError } from "@shopify/shopify-api";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
@@ -32,6 +33,7 @@ const RUN = Date.now().toString(36);
 const domains = [];
 let seq = 9400000000;
 let handle;
+let clearShopCooldowns;
 let fetchVariantForNotify;
 let LookupError;
 let appPrisma;
@@ -137,7 +139,7 @@ before(async () => {
   process.env.SHOPIFY_API_SECRET = SECRET;
   process.env.SHOPIFY_APP_URL = BASE;
   process.env.SCOPES = "write_products";
-  ({ handleInventoryLevelWebhook: handle } = await import("../app/models/inventory-webhook.server.js"));
+  ({ handleInventoryLevelWebhook: handle, clearShopCooldowns } = await import("../app/models/inventory-webhook.server.js"));
   appPrisma = (await import("../app/db.server.js")).default;
   ({ fetchVariantForNotify, LookupError } = await import("../app/models/shopify-lookup.server.js"));
 
@@ -1015,4 +1017,421 @@ test("recovery: a stored ignored_invalid result is never counted as processed", 
   let summary;
   try { summary = await recoverInventoryEvents({ shopDomains: [shop.domain], deps: fakeShopify((id) => SETTLED(id)).deps({ sleep: noWait }) }); } finally { restore(); }
   assert.deepEqual([summary.processed, summary.ignored], [0, 1]);
+});
+
+// ======================= Admin GraphQL accounting in the "[restock] inventory event" log =======================
+// Measurement only: every admin.graphql request of ONE event is counted and timed, retries and repeated reads
+// included. A fake clock that advances 5 ms per reading makes a request that runs alone last exactly 5 ms; the two
+// stock-topology requests are issued together, so their readings interleave (start, start, end, end) and each lasts 10 ms.
+const steppingClock = () => { let t = 0; return () => (t += 5); };
+const eventLines = (spy) => spy.mock.calls.filter((c) => c.arguments[0] === "[restock] inventory event" || c.arguments[0] === "[restock] inventory event failed").map((c) => ({ label: c.arguments[0], ...JSON.parse(c.arguments[1]) }));
+
+test("graphql accounting: a lagging read is re-read and every request is counted and timed on the event's log line", async () => {
+  const shop = await makeShop("gql-count");
+  const { itemId, variantGid } = await makeTracked(shop);
+  let reads = 0;
+  const shopify = fakeShopify((id) => (++reads < 2 ? LAGGING(id) : SETTLED(id)));
+  const log = mock.method(console, "log", () => {});
+  try {
+    const result = await deliver(shop, itemId, { input: { eventId: "ev-gql-count" }, deps: shopify.deps({ sleep: noWait, clock: steppingClock() }) });
+    assert.equal(result.outcome, "processed");
+    const [line] = eventLines(log).filter((l) => l.event === "ev-gql-count");
+    // two availability reads (the second is the repeated read) + the two stock-topology requests; sleeps and database work are not counted
+    assert.deepEqual(line.graphqlCalls.map((c) => c.kind), ["NotifyVariant", "NotifyVariant", "StockTopologyLevels", "StockTopologyServices"]);
+    assert.equal(line.graphqlCount, 4);
+    assert.deepEqual(line.graphqlCalls.map((c) => c.ms), [5, 5, 10, 10]);
+    assert.equal(line.graphqlMs, 30, "the total is the sum of the individual waits");
+    assert.equal(/token|secret|@|shpat/i.test(JSON.stringify(line)), false);
+  } finally { log.mock.restore(); }
+  assert.equal((await state(shop, variantGid)).restockCycle, 1, "behaviour is unchanged");
+});
+
+test("graphql accounting: a request that throws is still counted and timed, on the failure line", async () => {
+  const shop = await makeShop("gql-fail");
+  const { itemId } = await makeTracked(shop);
+  const shopify = fakeShopify(() => { throw new Error("Throttled"); });
+  const errors = mock.method(console, "error", () => {});
+  try {
+    const result = await deliver(shop, itemId, { input: { eventId: "ev-gql-fail" }, deps: shopify.deps({ sleep: noWait, clock: steppingClock() }) });
+    assert.deepEqual([result.status, result.outcome], [503, "failed"]);
+    const [line] = eventLines(errors).filter((l) => l.event === "ev-gql-fail");
+    assert.equal(line.label, "[restock] inventory event failed");
+    assert.deepEqual([line.graphqlCount, line.graphqlMs, line.graphqlCalls.map((c) => c.kind)], [1, 5, ["NotifyVariant"]]);
+  } finally { errors.mock.restore(); }
+});
+
+test("graphql accounting: an event with several tracked variants reports all of its requests", async () => {
+  const shop = await makeShop("gql-multi");
+  const first = await makeTracked(shop);
+  const second = await makeTracked(shop);
+  // both variants hang off the same inventory item
+  await prisma.variantAvailability.update({ where: { shopId_variantGid: { shopId: shop.id, variantGid: second.variantGid } }, data: { inventoryItemGid: `gid://shopify/InventoryItem/${first.itemId}` } });
+  const shopify = fakeShopify((id) => SETTLED(id));
+  const log = mock.method(console, "log", () => {});
+  try {
+    await deliver(shop, first.itemId, { input: { eventId: "ev-gql-multi" }, deps: shopify.deps({ sleep: noWait, clock: steppingClock() }) });
+    const lines = eventLines(log).filter((l) => l.event === "ev-gql-multi");
+    assert.deepEqual(lines.map((l) => l.graphqlCount), [3, 6], "cumulative for the event: the last line is the total");
+    assert.deepEqual(lines.map((l) => l.graphqlMs), [25, 50]);
+  } finally { log.mock.restore(); }
+});
+
+test("graphql accounting: concurrent events keep independent counters", async () => {
+  const shopA = await makeShop("gql-conc-a");
+  const shopB = await makeShop("gql-conc-b");
+  const a = await makeTracked(shopA);
+  const b = await makeTracked(shopB);
+  let readsA = 0;
+  const lagging = fakeShopify((id) => (++readsA < 3 ? LAGGING(id) : SETTLED(id))); // event A: 3 availability reads + 2 topology
+  const plain = fakeShopify((id) => SETTLED(id)); // event B: 1 availability read + 2 topology
+  const log = mock.method(console, "log", () => {});
+  try {
+    await Promise.all([
+      deliver(shopA, a.itemId, { input: { eventId: "ev-conc-a" }, deps: lagging.deps({ sleep: async () => { await new Promise((r) => setTimeout(r, 5)); }, clock: steppingClock() }) }),
+      deliver(shopB, b.itemId, { input: { eventId: "ev-conc-b" }, deps: plain.deps({ sleep: noWait, clock: steppingClock() }) }),
+    ]);
+    const lines = eventLines(log);
+    const lineA = lines.find((l) => l.event === "ev-conc-a");
+    const lineB = lines.find((l) => l.event === "ev-conc-b");
+    assert.deepEqual([lineA.graphqlCount, lineA.graphqlMs], [5, 35]);
+    assert.deepEqual([lineB.graphqlCount, lineB.graphqlMs], [3, 25]);
+  } finally { log.mock.restore(); }
+});
+
+// ======================= Shopify throttling =======================
+// The installed @shopify/shopify-api never retries (the app passes no `tries`) and throws HTTP 429 as an
+// HttpThrottlingError (Retry-After in seconds) and a GraphQL THROTTLED answer as a GraphqlQueryError. These tests use
+// the library's own error classes, so they pin the real shapes. A throttle is still a plain retryable failure for
+// Shopify (503) and keeps the code "shop_unavailable" for callers; it only adds `throttled` / `retryAfterMs`.
+const http429 = (retryAfter) => new HttpThrottlingError({ message: "Shopify is throttling requests", code: 429, statusText: "Too Many Requests", body: {}, headers: {}, retryAfter });
+const gqlThrottled = () => new GraphqlQueryError({ message: "Throttled", response: { status: 200 }, headers: {}, body: { errors: { graphQLErrors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] } } });
+const gqlOther = () => new GraphqlQueryError({ message: "Something else", response: { status: 200 }, headers: {}, body: { errors: { graphQLErrors: [{ message: "Access denied", extensions: { code: "ACCESS_DENIED" } }] } } });
+const httpFailure = (code) => new HttpResponseError({ message: `status ${code}`, code, statusText: "x", body: {}, headers: {} });
+const httpServerError = () => new HttpInternalError({ message: "boom", code: 500, statusText: "x", body: {}, headers: {} });
+const queryName = (query) => /query (\w+)/.exec(query)?.[1];
+// An Admin whose answers are chosen per query name; `calls` lists every request in order.
+function scriptedAdmin(handler) {
+  const calls = [];
+  return {
+    calls,
+    deps: (extra = {}) => ({
+      getAdmin: async () => ({ scope: "", admin: { async graphql(query, options) { calls.push(queryName(query)); return handler(queryName(query), options?.variables, calls.length); } } }),
+      sleep: noWait,
+      ...extra,
+    }),
+  };
+}
+const answerNode = (nodeFor) => (variables) => ({ json: async () => ({ data: { node: nodeFor(variables.id) } }) });
+const lookupAdmin = (error) => ({ async graphql() { throw error; } });
+const silenceErrors = () => mock.method(console, "error", () => {});
+
+test("throttling is told apart from other failures, and every failure keeps the same code and status", async () => {
+  const { fetchProductForEmail, fetchVariantForNotify: fetchVariant } = await import("../app/models/shopify-lookup.server.js");
+  const caught = async (error) => { try { await fetchProductForEmail(lookupAdmin(error), "gid://shopify/ProductVariant/1"); } catch (e) { return e; } return assert.fail("expected a failure"); };
+  const throttled = [[http429(2), 2000], [http429(0.5), 500], [http429(undefined), null], [http429(99999), 5 * 60 * 1000], [gqlThrottled(), null]];
+  for (const [error, wait] of throttled) {
+    const e = await caught(error);
+    assert.deepEqual([e instanceof LookupError, e.code, e.status, e.throttled, e.retryAfterMs], [true, "shop_unavailable", 503, true, wait]);
+  }
+  // a THROTTLED entry in an ordinary answer (what a client that returns errors instead of throwing gives)
+  const answered = { async graphql() { return { json: async () => ({ errors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] }) }; } };
+  const viaAnswer = await fetchVariant(answered, "gid://shopify/ProductVariant/1").catch((e) => e);
+  assert.deepEqual([viaAnswer.code, viaAnswer.throttled], ["shop_unavailable", true]);
+
+  const notThrottled = [httpFailure(401), httpFailure(403), httpFailure(404), httpServerError(), new HttpRequestError("socket hang up"), new TypeError("fetch failed"), gqlOther()];
+  for (const error of notThrottled) {
+    const e = await caught(error);
+    assert.deepEqual([e.code, e.status, e.throttled ?? false], ["shop_unavailable", 503, false], error.constructor.name);
+  }
+  const plain = await fetchVariant({ async graphql() { return { json: async () => ({ errors: [{ message: "Throttled" }] }) }; } }, "gid://shopify/ProductVariant/1").catch((e) => e);
+  assert.equal(plain.throttled ?? false, false, "a message alone is not the THROTTLED code");
+});
+
+test("stock topology: a throttled read fails (never 'unknown'); any other failure is still 'unknown'", async () => {
+  const { fetchStockTopology } = await import("../app/models/shopify-lookup.server.js");
+  for (const error of [http429(1), gqlThrottled()]) {
+    await assert.rejects(fetchStockTopology(lookupAdmin(error), "gid://shopify/ProductVariant/1"), (e) => e instanceof LookupError && e.throttled === true);
+  }
+  const throttledAnswer = { async graphql() { return { json: async () => ({ errors: [{ extensions: { code: "THROTTLED" } }] }) }; } };
+  await assert.rejects(fetchStockTopology(throttledAnswer, "gid://shopify/ProductVariant/1"), (e) => e.throttled === true);
+  for (const error of [httpFailure(403), gqlOther(), new TypeError("fetch failed")]) {
+    assert.deepEqual(await fetchStockTopology(lookupAdmin(error), "gid://shopify/ProductVariant/1"), { thirdPartyOnly: null });
+  }
+});
+
+test("a throttled availability read: one request (no tight retry loop), 503 for Shopify, event FAILED, nothing advanced; the retry then restocks once", async () => {
+  for (const [name, error] of [["429", http429(3)], ["graphql", gqlThrottled()]]) {
+    const shop = await makeShop(`thr-${name}`);
+    const { itemId, variantGid } = await makeTracked(shop, { subs: 1 });
+    let throttled = true;
+    const admin = scriptedAdmin((query, variables) => { if (throttled) throw error; return answerNode((id) => SETTLED(id))(variables); });
+    const input = { eventId: `ev-thr-${name}` };
+    const quiet = silenceErrors();
+    let first;
+    try { first = await deliver(shop, itemId, { input, deps: admin.deps() }); } finally { quiet.mock.restore(); }
+    assert.deepEqual([first.status, first.outcome], [503, "throttled"]);
+    assert.deepEqual(admin.calls, ["NotifyVariant"], "asked once; neither a re-read nor a topology request follows a throttle");
+    const [event] = await events(shop);
+    assert.deepEqual([event.status, event.errorCode, event.attempts], ["FAILED", "shopify_throttled", 1]);
+    const row = await state(shop, variantGid);
+    assert.deepEqual([row.isInStock, row.restockCycle, row.sourceUpdatedAt, await jobCount(shop, variantGid)], [false, 0, null, 0], "no state was advanced");
+
+    throttled = false;
+    clearShopCooldowns(); // this test is about the retry itself; the cool-down has its own tests
+    const retry = await deliver(shop, itemId, { input, deps: admin.deps() });
+    assert.deepEqual([retry.status, retry.outcome, retry.results], [200, "processed", ["restocked"]]);
+    assert.deepEqual([(await state(shop, variantGid)).restockCycle, await jobCount(shop, variantGid)], [1, 1]);
+  }
+});
+
+test("a throttled stock-topology read does not let Admin's word confirm a restock; a non-throttle topology failure still does", async () => {
+  const shop = await makeShop("thr-topology");
+  const throttledOne = await makeTracked(shop, { subs: 1 });
+  const admin = scriptedAdmin((query, variables) => {
+    if (query === "StockTopologyLevels") throw http429(1);
+    if (query === "StockTopologyServices") return { json: async () => ({ data: {} }) };
+    return answerNode((id) => SETTLED(id))(variables);
+  });
+  const quiet = silenceErrors();
+  let result;
+  try { result = await deliver(shop, throttledOne.itemId, { deps: admin.deps() }); } finally { quiet.mock.restore(); }
+  assert.deepEqual([result.status, result.outcome], [503, "throttled"]);
+  const row = await state(shop, throttledOne.variantGid);
+  assert.deepEqual([row.isInStock, row.restockCycle, await jobCount(shop, throttledOne.variantGid)], [false, 0, 0], "availability was not confirmed, so nothing changed");
+
+  clearShopCooldowns();
+  const unknownOne = await makeTracked(shop, { subs: 1 });
+  const denied = scriptedAdmin((query, variables) => {
+    if (query.startsWith("StockTopology")) throw httpFailure(403);
+    return answerNode((id) => SETTLED(id))(variables);
+  });
+  assert.deepEqual((await deliver(shop, unknownOne.itemId, { deps: denied.deps() })).results, ["restocked"], "unchanged: unknown topology is still settled by Admin");
+});
+
+test("auth, server and network failures are NOT treated as throttling: same 503, same code, nothing advanced", async () => {
+  const failures = [["401", httpFailure(401)], ["403", httpFailure(403)], ["500", httpServerError()], ["network", new HttpRequestError("socket hang up")]];
+  for (const [name, error] of failures) {
+    const shop = await makeShop(`thr-other-${name}`);
+    const { itemId, variantGid } = await makeTracked(shop);
+    const admin = scriptedAdmin(() => { throw error; });
+    const quiet = silenceErrors();
+    let result;
+    try { result = await deliver(shop, itemId, { deps: admin.deps() }); } finally { quiet.mock.restore(); }
+    assert.deepEqual([result.status, result.outcome], [503, "failed"], name);
+    const [event] = await events(shop);
+    assert.deepEqual([event.status, event.errorCode], ["FAILED", "shop_unavailable"], name);
+    assert.deepEqual([(await state(shop, variantGid)).restockCycle, await jobCount(shop, variantGid)], [0, 0]);
+  }
+});
+
+test("throttling stays bounded: the event is flagged after MAX_EVENT_ATTEMPTS and Shopify is then told 200", async () => {
+  const { MAX_EVENT_ATTEMPTS, UNRESOLVED_CODE } = await import("../app/models/inventory-webhook.server.js");
+  const shop = await makeShop("thr-bounded");
+  const { itemId, variantGid } = await makeTracked(shop);
+  const admin = scriptedAdmin(() => { throw http429(1); });
+  const quiet = silenceErrors();
+  const statuses = [];
+  try {
+    for (let i = 0; i < MAX_EVENT_ATTEMPTS; i += 1) statuses.push((clearShopCooldowns(), await deliver(shop, itemId, { input: { eventId: "ev-thr-bounded" }, deps: admin.deps() })).status);
+  } finally { quiet.mock.restore(); }
+  assert.deepEqual(statuses, [...Array(MAX_EVENT_ATTEMPTS - 1).fill(503), 200]);
+  assert.equal(admin.calls.length, MAX_EVENT_ATTEMPTS, "one request per attempt");
+  const [event] = await events(shop);
+  assert.deepEqual([event.status, event.errorCode, event.attempts], ["FAILED", UNRESOLVED_CODE, MAX_EVENT_ATTEMPTS]);
+  assert.deepEqual([(await state(shop, variantGid)).restockCycle, await jobCount(shop, variantGid)], [0, 0]);
+});
+
+test("recovery stops its batch at the first throttle: the other events keep their attempts for a later run", async () => {
+  const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
+  const shop = await makeShop("thr-recover");
+  const tracked = [await makeTracked(shop), await makeTracked(shop), await makeTracked(shop)];
+  for (const [i, t] of tracked.entries()) {
+    await seedEvent(shop, { resourceGid: `gid://shopify/InventoryItem/${t.itemId}`, status: "FAILED", attempts: 1, errorCode: "shop_unavailable", receivedAt: new Date(Date.now() - 3600 * 1000 - i * 1000) });
+  }
+  const admin = scriptedAdmin(() => { throw http429(1); });
+  const quiet = silenceErrors();
+  let summary;
+  try { summary = await recoverInventoryEvents({ shopDomains: [shop.domain], deps: admin.deps(), now: () => new Date(Date.now() + 10 * 60 * 1000) }); } finally { quiet.mock.restore(); }
+  assert.deepEqual(summary, { found: 3, processed: 0, ignored: 0, skipped: 0, failed: 1, throttled: 1 });
+  assert.equal(admin.calls.length, 1, "Shopify was asked once, not three times");
+  const rows = await events(shop);
+  assert.deepEqual(rows.map((r) => r.attempts).sort(), [1, 1, 2], "only one event spent an attempt");
+  assert.ok(rows.every((r) => r.status === "FAILED"), "all stay eligible");
+});
+
+// ======================= Per-shop Shopify cool-down =======================
+// After Shopify throttles a shop, that shop's inventory events (live webhooks and recovery) do not ask the Admin API
+// until the cool-down ends. A deferred event spends no attempt, is never finished, and stays eligible. The clock is
+// injected (deps.now), so nothing sleeps. State is process memory only (documented in the module).
+const clockAt = (start = Date.now()) => {
+  let t = start;
+  return { now: () => new Date(t), advance: (ms) => { t += ms; }, ms: () => t };
+};
+const SECOND = 1000;
+const eventRow = async (shop, key) => (await events(shop)).find((e) => e.dedupeKey === key);
+
+test("cool-down: a throttle starts it; another event of the shop makes no Admin request, spends no attempt, and is kept FAILED (no lease left behind)", async () => {
+  clearShopCooldowns();
+  const shop = await makeShop("cd-set");
+  const { itemId, variantGid } = await makeTracked(shop, { subs: 1 });
+  const clock = clockAt();
+  const admin = scriptedAdmin(() => { throw http429(30); });
+  const quiet = silenceErrors();
+  try {
+    const first = await deliver(shop, itemId, { input: { eventId: "cd-set-1" }, deps: admin.deps({ now: clock.now }) });
+    assert.deepEqual([first.status, first.outcome], [503, "throttled"]);
+    assert.equal(admin.calls.length, 1);
+
+    clock.advance(10 * SECOND); // still inside the 30 s Retry-After
+    const second = await deliver(shop, itemId, { input: { eventId: "cd-set-2" }, deps: admin.deps({ now: clock.now }) });
+    assert.deepEqual([second.status, second.outcome], [503, "deferred"], "retryable, not a success");
+    // the SAME event redelivered during the cool-down
+    const again = await deliver(shop, itemId, { input: { eventId: "cd-set-1" }, deps: admin.deps({ now: clock.now }) });
+    assert.deepEqual([again.status, again.outcome], [503, "deferred"]);
+    assert.equal(admin.calls.length, 1, "zero Admin requests while the shop cools down");
+  } finally { quiet.mock.restore(); }
+
+  const one = await eventRow(shop, "cd-set-1");
+  const two = await eventRow(shop, "cd-set-2");
+  assert.deepEqual([one.status, one.attempts, one.errorCode], ["FAILED", 1, "shopify_throttled"], "the throttled event keeps its single attempt");
+  assert.deepEqual([two.status, two.attempts, two.errorCode], ["FAILED", 0, "shopify_throttled"], "the deferred new event is stored with no attempt spent");
+  assert.equal((await events(shop)).filter((e) => e.status === "RECEIVED").length, 0, "nothing is held by a lease");
+  const row = await state(shop, variantGid);
+  assert.deepEqual([row.isInStock, row.restockCycle, await jobCount(shop, variantGid)], [false, 0, 0], "nothing advanced");
+});
+
+test("cool-down: a deferral after the event was claimed gives the claim and its attempt back (no lease left behind)", async () => {
+  clearShopCooldowns();
+  const { startShopCooldown } = await import("../app/models/inventory-webhook.server.js");
+  const shop = await makeShop("cd-release");
+  const { itemId } = await makeTracked(shop);
+  await seedEvent(shop, { resourceGid: `gid://shopify/InventoryItem/${itemId}`, status: "FAILED", attempts: 2, errorCode: "shop_unavailable", dedupeKey: "cd-release-1", receivedAt: new Date(Date.now() - 3600 * 1000) });
+  const admin = scriptedAdmin(() => { throw new Error("must not be asked"); });
+  // The shop starts cooling down while this delivery is claiming its event: the 2nd clock read is the check after the claim.
+  let reads = 0;
+  const now = () => { reads += 1; if (reads === 2) startShopCooldown(shop.domain, 30 * SECOND); return new Date(); };
+  const result = await deliver(shop, itemId, { input: { eventId: "cd-release-1" }, deps: admin.deps({ now }) });
+  assert.deepEqual([result.status, result.outcome], [503, "deferred"]);
+  assert.equal(admin.calls.length, 0);
+  const row = await eventRow(shop, "cd-release-1");
+  assert.deepEqual([row.status, row.attempts, row.errorCode], ["FAILED", 2, "shopify_throttled"], "FAILED again, the attempt it took is returned, claimable at once");
+  clearShopCooldowns();
+});
+
+test("cool-down: after it ends the deferred events process and the restock happens exactly once", async () => {
+  clearShopCooldowns();
+  const shop = await makeShop("cd-expire");
+  const { itemId, variantGid } = await makeTracked(shop, { subs: 1 });
+  const clock = clockAt();
+  let healthy = false;
+  const admin = scriptedAdmin((query, variables) => { if (!healthy) throw http429(30); return answerNode((id) => SETTLED(id))(variables); });
+  const quiet = silenceErrors();
+  try {
+    assert.equal((await deliver(shop, itemId, { input: { eventId: "cd-exp-1" }, deps: admin.deps({ now: clock.now }) })).outcome, "throttled");
+    assert.equal((await deliver(shop, itemId, { input: { eventId: "cd-exp-2" }, deps: admin.deps({ now: clock.now }) })).outcome, "deferred");
+  } finally { quiet.mock.restore(); }
+  healthy = true;
+  clock.advance(29 * SECOND);
+  assert.equal((await deliver(shop, itemId, { input: { eventId: "cd-exp-2" }, deps: admin.deps({ now: clock.now }) })).outcome, "deferred", "not before the wait is over");
+  assert.equal(admin.calls.length, 1);
+
+  clock.advance(2 * SECOND); // 31 s after the throttle
+  const one = await deliver(shop, itemId, { input: { eventId: "cd-exp-1" }, deps: admin.deps({ now: clock.now }) });
+  const two = await deliver(shop, itemId, { input: { eventId: "cd-exp-2" }, deps: admin.deps({ now: clock.now }) });
+  assert.deepEqual([one.status, one.outcome, one.results], [200, "processed", ["restocked"]]);
+  assert.deepEqual([two.status, two.outcome, two.results], [200, "processed", ["unchanged"]]);
+  assert.deepEqual([(await state(shop, variantGid)).restockCycle, await jobCount(shop, variantGid)], [1, 1], "one restock, one email job");
+  const rows = [await eventRow(shop, "cd-exp-1"), await eventRow(shop, "cd-exp-2")];
+  assert.deepEqual(rows.map((r) => [r.status, r.attempts]), [["PROCESSED", 2], ["PROCESSED", 1]], "the deferrals cost no attempt");
+});
+
+test("cool-down: one shop's cool-down does not affect another shop", async () => {
+  clearShopCooldowns();
+  const slow = await makeShop("cd-a");
+  const other = await makeShop("cd-b");
+  const a = await makeTracked(slow);
+  const b = await makeTracked(other);
+  const clock = clockAt();
+  const quiet = silenceErrors();
+  try {
+    const throttled = scriptedAdmin(() => { throw http429(60); });
+    assert.equal((await deliver(slow, a.itemId, { deps: throttled.deps({ now: clock.now }) })).outcome, "throttled");
+    const healthy = scriptedAdmin((query, variables) => answerNode((id) => SETTLED(id))(variables));
+    const result = await deliver(other, b.itemId, { deps: healthy.deps({ now: clock.now }) });
+    assert.deepEqual([result.status, result.outcome, result.results], [200, "processed", ["restocked"]]);
+    assert.ok(healthy.calls.length > 0, "the other shop did ask Shopify");
+    assert.equal((await deliver(slow, a.itemId, { deps: healthy.deps({ now: clock.now }) })).outcome, "deferred", "the cooling shop still waits");
+  } finally { quiet.mock.restore(); }
+});
+
+test("cool-down: only a throttle starts one; auth, server, network and not-settled failures do not", async () => {
+  clearShopCooldowns();
+  const failures = [["401", httpFailure(401)], ["403", httpFailure(403)], ["500", httpServerError()], ["network", new HttpRequestError("socket hang up")], ["graphql-other", gqlOther()]];
+  const quiet = silenceErrors();
+  try {
+    for (const [name, error] of failures) {
+      const shop = await makeShop(`cd-no-${name}`);
+      const { itemId } = await makeTracked(shop);
+      const admin = scriptedAdmin(() => { throw error; });
+      assert.equal((await deliver(shop, itemId, { deps: admin.deps() })).outcome, "failed", name);
+      assert.equal(admin.calls.length, 1, name);
+      assert.equal((await deliver(shop, itemId, { deps: admin.deps() })).outcome, "failed", `${name}: the next event is attempted, not deferred`);
+      assert.equal(admin.calls.length, 2, name);
+    }
+  } finally { quiet.mock.restore(); }
+});
+
+test("cool-down: Retry-After missing, invalid, zero or oversized gives 1 minute (default) or at most 5 minutes (cap)", async () => {
+  const { cooldownMsOf, COOLDOWN_DEFAULT_MS, COOLDOWN_MAX_MS } = await import("../app/models/inventory-webhook.server.js");
+  assert.deepEqual([COOLDOWN_DEFAULT_MS, COOLDOWN_MAX_MS], [60 * SECOND, 300 * SECOND]);
+  for (const bad of [undefined, null, NaN, "abc", 0, -5, ""]) assert.equal(cooldownMsOf(bad), 60 * SECOND, `default for ${String(bad)}`);
+  assert.equal(cooldownMsOf(2 * SECOND), 2 * SECOND);
+  assert.equal(cooldownMsOf(300 * SECOND), 300 * SECOND);
+  for (const big of [300 * SECOND + 1, 99999 * SECOND, Infinity]) assert.equal(cooldownMsOf(big), 300 * SECOND, `cap for ${String(big)}`);
+
+  // End to end, through the real error shapes: how long the shop really waits.
+  const cases = [["missing", () => http429(undefined), 60], ["zero", () => http429(0), 60], ["invalid", () => http429(NaN), 60], ["graphql", gqlThrottled, 60], ["short", () => http429(20), 20], ["oversized", () => http429(99999), 300]];
+  const quiet = silenceErrors();
+  try {
+    for (const [name, make, waitSeconds] of cases) {
+      clearShopCooldowns();
+      const shop = await makeShop(`cd-len-${name}`);
+      const { itemId } = await makeTracked(shop);
+      const clock = clockAt();
+      const admin = scriptedAdmin(() => { throw make(); });
+      assert.equal((await deliver(shop, itemId, { deps: admin.deps({ now: clock.now }) })).outcome, "throttled", name);
+      clock.advance((waitSeconds - 1) * SECOND);
+      assert.equal((await deliver(shop, itemId, { deps: admin.deps({ now: clock.now }) })).outcome, "deferred", `${name}: still waiting 1 s before the end`);
+      assert.equal(admin.calls.length, 1, name);
+      clock.advance(2 * SECOND);
+      assert.equal((await deliver(shop, itemId, { deps: admin.deps({ now: clock.now }) })).outcome, "throttled", `${name}: asked again once ${waitSeconds} s have passed`);
+      assert.equal(admin.calls.length, 2, name);
+    }
+  } finally { quiet.mock.restore(); }
+});
+
+test("cool-down: recovery respects it, asks Shopify nothing, spends no attempt however often it runs, and resumes afterwards", async () => {
+  clearShopCooldowns();
+  const { recoverInventoryEvents, startShopCooldown } = await import("../app/models/inventory-webhook.server.js");
+  const shop = await makeShop("cd-recover");
+  const tracked = [await makeTracked(shop), await makeTracked(shop)];
+  for (const [i, t] of tracked.entries()) {
+    await seedEvent(shop, { resourceGid: `gid://shopify/InventoryItem/${t.itemId}`, status: "FAILED", attempts: 1, errorCode: "shop_unavailable", dedupeKey: `cd-rec-${i}`, receivedAt: new Date(Date.now() - 3600 * 1000 - i * 1000) });
+  }
+  const clock = clockAt();
+  startShopCooldown(shop.domain, 120 * SECOND, clock.ms());
+  const admin = scriptedAdmin((query, variables) => answerNode((id) => SETTLED(id))(variables));
+  const run = () => recoverInventoryEvents({ shopDomains: [shop.domain], deps: admin.deps({ now: clock.now }), now: () => new Date(clock.ms() + 10 * 60 * 1000) });
+
+  for (let i = 0; i < 3; i += 1) {
+    assert.deepEqual(await run(), { found: 2, processed: 0, ignored: 0, skipped: 0, failed: 0, deferred: 2 }, `run ${i + 1}`);
+    clock.advance(10 * SECOND);
+  }
+  assert.equal(admin.calls.length, 0, "Shopify was never asked");
+  assert.deepEqual((await events(shop)).map((e) => [e.status, e.attempts]), [["FAILED", 1], ["FAILED", 1]], "no attempt spent, nothing claimed");
+
+  clock.advance(120 * SECOND);
+  assert.deepEqual(await run(), { found: 2, processed: 2, ignored: 0, skipped: 0, failed: 0 });
+  assert.ok((await events(shop)).every((e) => e.status === "PROCESSED" && e.attempts === 2));
+  for (const t of tracked) assert.deepEqual([(await state(shop, t.variantGid)).restockCycle, await jobCount(shop, t.variantGid)], [1, 1]);
 });

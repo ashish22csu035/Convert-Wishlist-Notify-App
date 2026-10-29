@@ -12,6 +12,7 @@
 import "./helpers/resolve-extensionless.mjs";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { GraphqlQueryError, HttpInternalError, HttpRequestError, HttpResponseError, HttpThrottlingError } from "@shopify/shopify-api";
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
@@ -731,4 +732,225 @@ test("the link in a real queued email works end to end: send, then unsubscribe t
   const original = new URL(link).searchParams.get("t");
   const changed = (original[0] === "A" ? "B" : "A") + original.slice(1); // always differs from the real token
   assert.equal((await fetch(`${BASE}/notify/unsubscribe?t=${changed}`, { method: "POST" })).status, 404, "a changed token is not valid");
+});
+
+// ======================= product lookups are shared within one drain =======================
+// A restock queues one job per subscriber; they all need the same product details. The worker keeps the answers of
+// one drain in a cache keyed by shop AND variant, so a variant costs one Shopify lookup per drain, not one per email.
+const titled = (title) => ({ ...PRODUCT, product: { ...PRODUCT.product, title } });
+// getAdmin that counts every product lookup as [shop domain, variant id]. `answer(domain, id, n)` returns the node
+// (n is the 1-based number of this lookup); it may throw to simulate a failing Shopify.
+function countingAdmin(answer) {
+  const lookups = [];
+  const getAdmin = async (domain) => ({
+    scope: "",
+    admin: {
+      async graphql(query, { variables }) {
+        lookups.push([domain, variables.id]);
+        const node = await answer(domain, variables.id, lookups.length);
+        return { json: async () => ({ data: { node } }) };
+      },
+    },
+  });
+  return { lookups, getAdmin };
+}
+const mailText = (mail) => `${mail.subject}\n${mail.text}`;
+
+test("product cache: several jobs for one shop and variant make ONE lookup in a drain, and every email is complete", async () => {
+  const shop = await makeShop("pc-same");
+  const first = await makeJob(shop);
+  const jobs = [first, await makeJob(shop, { variantGid: first.variantGid }), await makeJob(shop, { variantGid: first.variantGid }), await makeJob(shop, { variantGid: first.variantGid })];
+  const admin = countingAdmin((domain, id) => ({ ...titled("Shared Board"), id }));
+  const transport = fakeTransport();
+  const summary = await m.createWorker({ batchSize: 2, shopIds: [shop.id], ctx: ctxWith(transport, { getAdmin: admin.getAdmin }), log: quiet }).drain(); // several passes: one cache for all
+  assert.deepEqual([summary.handled, summary.outcomes], [4, { SENT: 4 }]);
+  assert.equal(admin.lookups.length, 1, "one Shopify lookup for four emails");
+  assert.equal(transport.calls.length, 4);
+  assert.ok(transport.calls.every((mail) => mailText(mail).includes("Shared Board")), "each email still has the product details");
+  for (const { job, sub } of jobs) assert.deepEqual([(await jobRow(job.id)).status, (await subRow(sub.id)).status], ["SENT", "FULFILLED"]);
+});
+
+test("product cache: different variants of one shop never share an answer", async () => {
+  const shop = await makeShop("pc-variants");
+  const a = await makeJob(shop);
+  const b = await makeJob(shop);
+  await makeJob(shop, { variantGid: a.variantGid });
+  await makeJob(shop, { variantGid: b.variantGid });
+  const admin = countingAdmin((domain, id) => ({ ...titled(`Board ${id.split("/").pop()}`), id }));
+  const transport = fakeTransport();
+  const summary = await m.createWorker({ shopIds: [shop.id], ctx: ctxWith(transport, { getAdmin: admin.getAdmin }), log: quiet }).drain();
+  assert.deepEqual(summary.outcomes, { SENT: 4 });
+  assert.equal(admin.lookups.length, 2, "one lookup per variant");
+  for (const mail of transport.calls) {
+    const title = [a, b].map((x) => `Board ${x.variantGid.split("/").pop()}`).filter((t) => mailText(mail).includes(t));
+    assert.equal(title.length, 1, "an email names exactly its own variant's product");
+  }
+});
+
+test("product cache: different shops never share an answer, even for the same variant id", async () => {
+  const one = await makeShop("pc-shop-a");
+  const two = await makeShop("pc-shop-b");
+  const variantGid = `gid://shopify/ProductVariant/${(seq += 1)}`;
+  await makeJob(one, { variantGid });
+  await makeJob(one, { variantGid });
+  await makeJob(two, { variantGid });
+  await makeJob(two, { variantGid });
+  const admin = countingAdmin((domain, id) => ({ ...titled(domain === one.domain ? "Shop One Board" : "Shop Two Board"), id }));
+  const transport = fakeTransport();
+  const summary = await m.createWorker({ shopIds: [one.id, two.id], ctx: ctxWith(transport, { getAdmin: admin.getAdmin }), log: quiet }).drain();
+  assert.deepEqual(summary.outcomes, { SENT: 4 });
+  assert.deepEqual(admin.lookups.map(([domain]) => domain).sort(), [one.domain, two.domain].sort(), "each shop was asked once, through its own admin");
+  const texts = transport.calls.map(mailText);
+  assert.equal(texts.filter((t) => t.includes("Shop One Board")).length, 2);
+  assert.equal(texts.filter((t) => t.includes("Shop Two Board")).length, 2);
+});
+
+test("product cache: a failed lookup is not kept; the next job for the same variant asks Shopify again", async () => {
+  const shop = await makeShop("pc-fail");
+  const first = await makeJob(shop);
+  const second = await makeJob(shop, { variantGid: first.variantGid });
+  const admin = countingAdmin((domain, id, n) => {
+    if (n === 1) throw new Error("shopify down");
+    return { ...titled("Recovered Board"), id };
+  });
+  const transport = fakeTransport();
+  const summary = await m.createWorker({ shopIds: [shop.id], ctx: ctxWith(transport, { getAdmin: admin.getAdmin }), log: quiet }).drain();
+  assert.equal(admin.lookups.length, 2, "the failure was not cached");
+  assert.deepEqual(summary.outcomes, { PENDING: 1, SENT: 1 }, "the first job is scheduled for a retry as before, the second is sent");
+  const rows = await Promise.all([first.job.id, second.job.id].map(jobRow));
+  assert.deepEqual(rows.map((r) => r.status).sort(), ["PENDING", "SENT"]);
+  assert.equal(rows.find((r) => r.status === "PENDING").errorCode, "shop_unavailable");
+  assert.ok(mailText(transport.calls[0]).includes("Recovered Board"));
+});
+
+test("product cache: nothing is carried from one drain to the next", async () => {
+  const shop = await makeShop("pc-drains");
+  const admin = countingAdmin((domain, id) => ({ ...titled("Board"), id }));
+  const worker = m.createWorker({ shopIds: [shop.id], ctx: ctxWith(fakeTransport(), { getAdmin: admin.getAdmin }), log: quiet });
+  const first = await makeJob(shop);
+  await worker.drain();
+  await makeJob(shop, { variantGid: first.variantGid });
+  await worker.drain();
+  assert.equal(admin.lookups.length, 2, "the second run read the product afresh");
+});
+
+test("product cache: concurrent requests for one key share one in-flight lookup; a rejection is forgotten", async () => {
+  const cache = m.createProductCache();
+  let calls = 0;
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const load = async () => { calls += 1; await gate; return { title: "x" }; };
+  const both = Promise.all([cache.get("s", "v", load), cache.get("s", "v", load)]);
+  release();
+  const [a, b] = await both;
+  assert.deepEqual([calls, a === b], [1, true]);
+  assert.equal(await cache.get("s", "v", load), a, "and the finished answer is reused");
+
+  let attempts = 0;
+  const flaky = async () => { attempts += 1; if (attempts === 1) throw new Error("boom"); return { title: "ok" }; };
+  await assert.rejects(cache.get("s", "other", flaky), /boom/);
+  assert.deepEqual(await cache.get("s", "other", flaky), { title: "ok" });
+  assert.equal(attempts, 2);
+  assert.equal(await cache.get("t", "v", async () => "other shop"), "other shop", "the shop is part of the key");
+});
+
+// ======================= Shopify throttling in the email worker =======================
+// A throttled product lookup is the same bounded retry as any transient failure (one attempt used, normal backoff),
+// but never earlier than the wait Shopify asked for, and the worker stops claiming more jobs for the run so a
+// throttle cannot spend the attempts of every queued email at once. Nothing is sent and nothing is marked notified.
+const http429 = (retryAfter) => new HttpThrottlingError({ message: "Shopify is throttling requests", code: 429, statusText: "Too Many Requests", body: {}, headers: {}, retryAfter });
+const gqlThrottled = () => new GraphqlQueryError({ message: "Throttled", response: { status: 200 }, headers: {}, body: { errors: { graphQLErrors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] } } });
+const httpFailure = (code) => new HttpResponseError({ message: `status ${code}`, code, statusText: "x", body: {}, headers: {} });
+const failingAdmin = (error) => fakeAdmin(() => { throw error; });
+const MINUTE = 60 * 1000;
+
+test("throttled lookup: THROTTLED, one attempt used, retry no earlier than Retry-After, nothing sent or marked notified", async () => {
+  const shop = await makeShop("thr-retry-after");
+  const { job, sub } = await makeJob(shop);
+  const transport = fakeTransport();
+  const before = Date.now();
+  const { result } = await claimAndRun(shop, ctxWith(transport, { getAdmin: failingAdmin(http429(120)) }));
+  assert.equal(result, "THROTTLED");
+  const row = await jobRow(job.id);
+  assert.deepEqual([row.status, row.attempts, row.errorCode, row.outboundMessageId, row.leaseExpiresAt], ["PENDING", 1, "shopify_throttled", null, null]);
+  const wait = row.nextAttemptAt.getTime() - before;
+  assert.ok(wait >= 120 * 1000 - 1000 && wait < 125 * 1000, `waits for Retry-After (120 s), not the 60 s backoff: ${wait} ms`);
+  assert.equal(transport.calls.length, 0);
+  assert.equal((await subRow(sub.id)).status, "ACTIVE");
+});
+
+test("throttled lookup: without Retry-After (GraphQL THROTTLED) the normal backoff applies, and a short Retry-After never shortens it", async () => {
+  const shop = await makeShop("thr-backoff");
+  const first = await makeJob(shop);
+  const before = Date.now();
+  assert.equal((await claimAndRun(shop, ctxWith(fakeTransport(), { getAdmin: failingAdmin(gqlThrottled()) }))).result, "THROTTLED");
+  const a = (await jobRow(first.job.id)).nextAttemptAt.getTime() - before;
+  assert.ok(a >= MINUTE - 1000 && a < MINUTE + 5000, `attempt 1: the 1-minute backoff (${a} ms)`);
+
+  const third = await makeJob(shop);
+  await prisma.emailDelivery.update({ where: { id: third.job.id }, data: { attempts: 2 } }); // the claim makes it attempt 3: backoff 16 minutes
+  const start = Date.now();
+  assert.equal((await claimAndRun(shop, ctxWith(fakeTransport(), { getAdmin: failingAdmin(http429(5)) }))).result, "THROTTLED");
+  const b = (await jobRow(third.job.id)).nextAttemptAt.getTime() - start;
+  assert.ok(b >= 16 * MINUTE - 1000, `attempt 3: Retry-After of 5 s does not undercut the 16-minute backoff (${b} ms)`);
+});
+
+test("throttling stays bounded: after the last attempt the job is FAILED, never retried for ever", async () => {
+  const shop = await makeShop("thr-last");
+  const { job, sub } = await makeJob(shop);
+  await prisma.emailDelivery.update({ where: { id: job.id }, data: { attempts: m.MAX_ATTEMPTS - 1 } });
+  const { result } = await claimAndRun(shop, ctxWith(fakeTransport(), { getAdmin: failingAdmin(http429(1)) }));
+  assert.equal(result, "FAILED");
+  const row = await jobRow(job.id);
+  assert.deepEqual([row.status, row.attempts, row.errorCode], ["FAILED", m.MAX_ATTEMPTS, "shopify_throttled"]);
+  assert.equal((await subRow(sub.id)).status, "ACTIVE");
+});
+
+test("auth, server and network failures are not throttling: PENDING with the normal backoff, as before", async () => {
+  const failures = [httpFailure(401), httpFailure(403), new HttpInternalError({ message: "boom", code: 500, statusText: "x", body: {}, headers: {} }), new HttpRequestError("socket hang up")];
+  for (const error of failures) {
+    const shop = await makeShop("thr-other");
+    const { job } = await makeJob(shop);
+    const before = Date.now();
+    const { result } = await claimAndRun(shop, ctxWith(fakeTransport(), { getAdmin: failingAdmin(error) }));
+    assert.equal(result, "PENDING", error.constructor.name);
+    const row = await jobRow(job.id);
+    assert.deepEqual([row.status, row.attempts, row.errorCode], ["PENDING", 1, "shop_unavailable"], error.constructor.name);
+    const wait = row.nextAttemptAt.getTime() - before;
+    assert.ok(wait >= MINUTE - 1000 && wait < MINUTE + 5000, `${error.constructor.name}: ${wait} ms`);
+  }
+});
+
+test("drain: a throttle stops the run at once; the other due jobs are not claimed, keep all their attempts, and are sent by the next run", async () => {
+  const shop = await makeShop("thr-drain");
+  const jobs = [await makeJob(shop), await makeJob(shop), await makeJob(shop)];
+  const transport = fakeTransport();
+  let lookups = 0;
+  const throttled = async () => ({ scope: "", admin: { async graphql() { lookups += 1; throw http429(2); } } });
+  const worker = m.createWorker({ batchSize: 1, shopIds: [shop.id], ctx: ctxWith(transport, { getAdmin: throttled }), log: quiet }); // several passes would be needed otherwise
+  const summary = await worker.drain();
+  assert.deepEqual([summary.handled, summary.outcomes], [1, { THROTTLED: 1 }]);
+  assert.equal(lookups, 1, "Shopify was asked once, not once per queued job");
+  assert.equal(transport.calls.length, 0);
+  const rows = await Promise.all(jobs.map((j) => jobRow(j.job.id)));
+  assert.deepEqual(rows.map((r) => [r.status, r.attempts]).sort(), [["PENDING", 0], ["PENDING", 0], ["PENDING", 1]]);
+
+  // Shopify recovered: the two untouched jobs go out; the throttled one waits for its Retry-After.
+  const next = await m.createWorker({ shopIds: [shop.id], ctx: ctxWith(transport), log: quiet }).drain();
+  assert.deepEqual([next.handled, next.outcomes], [2, { SENT: 2 }]);
+  const after = await Promise.all(jobs.map((j) => jobRow(j.job.id)));
+  assert.deepEqual(after.map((r) => r.status).sort(), ["PENDING", "SENT", "SENT"]);
+});
+
+test("a failed throttled lookup is not cached either: the next drain asks Shopify again", async () => {
+  const shop = await makeShop("thr-cache");
+  const first = await makeJob(shop);
+  let n = 0;
+  const flaky = async () => ({ scope: "", admin: { async graphql(query, { variables }) { n += 1; if (n === 1) throw http429(1); return { json: async () => ({ data: { node: { ...PRODUCT, id: variables.id } } }) }; } } });
+  const transport = fakeTransport();
+  const worker = m.createWorker({ shopIds: [shop.id], ctx: ctxWith(transport, { getAdmin: flaky }), log: quiet });
+  assert.deepEqual((await worker.drain()).outcomes, { THROTTLED: 1 });
+  await prisma.emailDelivery.update({ where: { id: first.job.id }, data: { nextAttemptAt: new Date(Date.now() - 1000) } }); // its wait is over
+  assert.deepEqual((await worker.drain()).outcomes, { SENT: 1 });
+  assert.equal(n, 2);
 });

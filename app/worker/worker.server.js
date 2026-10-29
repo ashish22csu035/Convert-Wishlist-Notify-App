@@ -1,4 +1,4 @@
-import { DEFAULT_LEASE_MS, claimNext, processJob, recoverExpiredLeases } from "../models/email-delivery.server";
+import { DEFAULT_LEASE_MS, claimNext, createProductCache, processJob, recoverExpiredLeases } from "../models/email-delivery.server";
 
 // The email worker. It only looks at the database for queued EmailDelivery rows; it never asks
 // Shopify about inventory (that is the webhook's job).
@@ -20,14 +20,18 @@ export function createWorker({ intervalMs = 15000, batchSize = 10, leaseMs = DEF
   let stopping = false;
   let running = null;
   let draining = null;
+  let drainCache = null; // product lookups shared by the passes of one drain; a timed-loop pass uses its own
+  let throttled = false; // Shopify said "too fast" during the latest pass: nothing more is claimed until a later run
   let outcomes = {};
 
   async function pass() {
+    throttled = false;
+    const productCache = drainCache ?? createProductCache();
     // Optional: replay inventory events that did not finish, so their restock jobs exist before sending.
     if (recover) {
       try {
         const done = await recover();
-        if (done?.found) log.log(`[worker] inventory events recovered: ${done.processed} processed, ${done.ignored ?? 0} ignored, ${done.skipped ?? 0} skipped, ${done.failed} still failing`);
+        if (done?.found) log.log(`[worker] inventory events recovered: ${done.processed} processed, ${done.ignored ?? 0} ignored, ${done.skipped ?? 0} skipped, ${done.failed} still failing${done.throttled ? " (Shopify is rate limiting: the rest waits for a later run)" : ""}`);
       } catch (error) {
         log.error(`[worker] inventory recovery failed: ${error?.code ?? error?.name ?? "error"}`);
       }
@@ -38,8 +42,9 @@ export function createWorker({ intervalMs = 15000, batchSize = 10, leaseMs = DEF
     while (!stopping && handled < batchSize) {
       const job = await claimNext({ leaseMs, shopIds });
       if (!job) break;
+      let result;
       try {
-        const result = await processJob(job, { ...ctx, leaseMs });
+        result = await processJob(job, { ...ctx, leaseMs, productCache });
         outcomes[result] = (outcomes[result] ?? 0) + 1;
         log.log(`[worker] job ${job.id} -> ${result}`);
       } catch (error) {
@@ -48,6 +53,12 @@ export function createWorker({ intervalMs = 15000, batchSize = 10, leaseMs = DEF
         log.error(`[worker] job ${job.id} crashed: ${error?.code ?? error?.name ?? "error"}`);
       }
       handled += 1;
+      if (result === "THROTTLED") {
+        // The job is already scheduled for later. Claiming more would only spend their attempts on the same answer.
+        throttled = true;
+        log.log("[worker] Shopify is rate limiting: not claiming more jobs in this run");
+        break;
+      }
     }
     return handled;
   }
@@ -69,16 +80,18 @@ export function createWorker({ intervalMs = 15000, batchSize = 10, leaseMs = DEF
   function drain() {
     if (!draining) {
       outcomes = {};
+      drainCache = createProductCache();
       draining = (async () => {
         let handled = 0;
         while (!stopping) {
           const count = await tick();
           handled += count;
-          if (count === 0) break;
+          if (count === 0 || throttled) break; // throttled: whatever is still due waits for a later run
         }
         return { handled, outcomes: { ...outcomes }, interrupted: stopping };
       })().finally(() => {
         draining = null;
+        drainCache = null;
       });
     }
     return draining;

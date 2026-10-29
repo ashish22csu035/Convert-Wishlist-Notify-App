@@ -21,6 +21,7 @@ import { addressOf } from "./mail-config.server";
 // that dies after it might have delivered and becomes UNKNOWN instead.
 
 export const MAX_ATTEMPTS = 5;
+const THROTTLED_REASON = "shopify_throttled";
 export const DEFAULT_LEASE_MS = 5 * 60 * 1000;
 
 // 1 minute, 4, 16, 64, then capped at 2 hours.
@@ -103,6 +104,29 @@ export function classifySmtpError(error) {
 const settle = (id, data, from = ["SENDING"]) =>
   prisma.emailDelivery.updateMany({ where: { id, status: { in: from } }, data: { leaseExpiresAt: null, ...data } });
 
+// Product details for the emails of one drain (or one pass), so N subscribers of the same variant cost one Shopify
+// lookup instead of N. Keyed by shop AND variant, so shops never share an entry. Only a successful answer is kept:
+// a failed lookup is forgotten at once and the next job asks Shopify again. Jobs asking for a key that is still in
+// flight share that one request. Nothing outlives the object, and the worker makes a new one per drain, so details
+// are never carried to the next run (a renamed or unpublished product is seen within one run's length).
+export function createProductCache() {
+  const entries = new Map();
+  return {
+    get(shopId, variantGid, load) {
+      const key = JSON.stringify([shopId, variantGid]);
+      let entry = entries.get(key);
+      if (!entry) {
+        entry = load();
+        entries.set(key, entry);
+        entry.catch(() => {
+          if (entries.get(key) === entry) entries.delete(key);
+        });
+      }
+      return entry;
+    },
+  };
+}
+
 // Why a claimed job should not be sent, or null when it is eligible.
 function ineligibleReason(job, subscription, availability) {
   if (!subscription || subscription.shopId !== job.shopId) return "subscription_missing";
@@ -113,7 +137,7 @@ function ineligibleReason(job, subscription, availability) {
   return null;
 }
 
-// ctx: { transport, config: { mailFrom, baseUrl }, getAdmin, now?, leaseMs? }
+// ctx: { transport, config: { mailFrom, baseUrl }, getAdmin, now?, leaseMs?, productCache? }
 // Returns the resulting status, for logging and tests. Never logs addresses.
 export async function processJob(job, ctx) {
   const { transport, config, getAdmin } = ctx;
@@ -131,13 +155,14 @@ export async function processJob(job, ctx) {
     await settle(job.id, { status: "SKIPPED", errorCode: reason });
     return "SKIPPED";
   };
-  const retryLater = async (reason) => {
+  // `notBeforeMs`: a wait Shopify asked for (Retry-After); the retry is never earlier than the normal backoff or that.
+  const retryLater = async (reason, notBeforeMs = 0) => {
     if (job.attempts >= MAX_ATTEMPTS) {
       // Nothing was sent, so no message id or unsubscribe token is kept for it.
       await settle(job.id, { status: "FAILED", errorCode: reason, outboundMessageId: null, linkTokenHash: null });
       return "FAILED";
     }
-    await settle(job.id, { status: "PENDING", errorCode: reason, nextAttemptAt: new Date(now().getTime() + backoffMs(job.attempts)), outboundMessageId: null, linkTokenHash: null });
+    await settle(job.id, { status: "PENDING", errorCode: reason, nextAttemptAt: new Date(now().getTime() + Math.max(backoffMs(job.attempts), notBeforeMs)), outboundMessageId: null, linkTokenHash: null });
     return "PENDING";
   };
 
@@ -150,10 +175,18 @@ export async function processJob(job, ctx) {
   // Current product details from Shopify. Nothing is invented: no title or link, no email.
   let product;
   try {
-    const { admin } = await getAdmin(shop.domain);
-    product = await fetchProductForEmail(admin, job.variantGid);
+    const lookup = async () => {
+      const { admin } = await getAdmin(shop.domain);
+      return fetchProductForEmail(admin, job.variantGid);
+    };
+    product = ctx.productCache ? await ctx.productCache.get(job.shopId, job.variantGid, lookup) : await lookup();
   } catch (error) {
     if (error instanceof LookupError && error.code === "variant_not_found") return skip("product_unavailable");
+    if (error instanceof LookupError && error.throttled) {
+      // Same bounded retry as any transient failure, but reported as THROTTLED so the worker stops claiming more jobs now.
+      const settled = await retryLater(THROTTLED_REASON, error.retryAfterMs ?? 0);
+      return settled === "PENDING" ? "THROTTLED" : settled;
+    }
     return retryLater(error instanceof LookupError ? error.code : "product_lookup_failed");
   }
   if (product.status !== "ACTIVE") return skip("product_unavailable");

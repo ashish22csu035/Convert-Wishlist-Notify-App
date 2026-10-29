@@ -16,6 +16,7 @@ const DELIVERY_REASONS = {
   lease_expired: "Interrupted while sending; the result is unknown",
   send_outcome_unknown: "Connection lost while sending; it may or may not have arrived",
   shop_unavailable: "Shopify could not be reached; will retry",
+  shopify_throttled: "Shopify asked us to slow down; will retry",
   product_lookup_failed: "Product details could not be read; will retry",
 };
 

@@ -23,6 +23,8 @@ services:
       retries: 12
       start_period: 60s
 
+
+
   web:
     image: konvert-wishlist-notify:local
     build:
@@ -52,6 +54,8 @@ services:
       retries: 3
       start_period: 20s
 
+
+
   worker:
     image: konvert-wishlist-notify:local
     build:
@@ -69,6 +73,8 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 50s
+
+
 
   migrate:
     image: konvert-wishlist-notify:local
