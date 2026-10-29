@@ -31,3 +31,5 @@ database.sqlite
 
 # Local backups (may contain SQLite data and tokens)
 /backups/
+
+kw.tar
