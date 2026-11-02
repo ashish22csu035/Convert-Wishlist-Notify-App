@@ -6,6 +6,7 @@
 //   - A run that hangs is stopped (SIGTERM, then SIGKILL) after MAX_RUN_MS.
 //   - The worker's output goes straight to this container's logs (docker compose logs worker).
 import { spawn } from "node:child_process";
+import process from "node:process";
 
 const INTERVAL_MS = Number(process.env.CRON_INTERVAL_MS) || 10 * 60 * 1000; // override is for tests only
 const MAX_RUN_MS = 8 * 60 * 1000;

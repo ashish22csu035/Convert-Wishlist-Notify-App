@@ -4,9 +4,10 @@ import { useBlocker, useFetcher, useLocation, useNavigate } from "react-router";
 import { withEmbeddedParams } from "../utils/embedded-url";
 import { FEATURE_FIELDS, isDirty } from "../utils/settings-shared";
 import { Page } from "./merchant-ui";
-import { WcSwitch, flags } from "./wc-fields";
+import { NativeSaveBar } from "./native-save-bar";
+import { WcSwitch } from "./wc-fields";
 
-// The Settings screen: one independent switch per storefront feature, saved with an explicit Save button.
+// The Settings screen: one independent switch per storefront feature, saved with Shopify's native Save / Discard bar.
 // The server is the authority (the route action validates again with utils/settings-shared.js) and only a
 // confirmed write is reported as saved.
 
@@ -61,21 +62,15 @@ export function SettingsForm({ settings }) {
     for (const field of FEATURE_FIELDS) data.set(field, values[field] ? "true" : "false");
     fetcher.submit(data, { method: "POST" });
   };
+  const discard = () => setValues(saved); // back to what the server last confirmed; nothing is sent
   const justSaved = fetcher.data?.ok && !dirty;
 
   return (
     <Page
       title="Settings"
       subtitle="Choose which features customers see on your storefront."
-      actions={
-        <>
-          {dirty ? <span className="kv-id">Unsaved changes</span> : null}
-          <s-button variant="primary" onClick={save} {...flags({ disabled: !dirty || saving, loading: saving })}>
-            {saving ? "Saving…" : "Save"}
-          </s-button>
-        </>
-      }
     >
+      <NativeSaveBar id="settings-save-bar" open={dirty} saving={saving} onSave={save} onDiscard={discard} />
       {blocker.state === "blocked" ? (
         <s-banner tone="warning" heading="You have unsaved changes">
           Leaving this page will discard them.
@@ -121,6 +116,14 @@ export function SettingsForm({ settings }) {
                   Wishlist Settings
                 </s-button>
                 <p>Choose the icon, colors, button style and layout of the Wishlist on your storefront.</p>
+              </div>
+            ) : null}
+            {feature.key === "notifyMeEnabled" ? (
+              <div className="kv-form-link">
+                <s-button href="/app/notify-settings" onClick={() => navigate(withEmbeddedParams("/app/notify-settings", search))}>
+                  Notify Me Settings
+                </s-button>
+                <p>Choose the text and look of the Notify Me button, and what the back-in-stock email says.</p>
               </div>
             ) : null}
           </section>

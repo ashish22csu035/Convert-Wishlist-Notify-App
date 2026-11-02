@@ -96,11 +96,22 @@ test("numbers: whole numbers inside their range only; limits are inclusive", () 
   assert.deepEqual(Object.keys(validateAppearance({ collectionPage: { iconSize: null } }).errors), ["collectionPage.iconSize"]);
 });
 
-test("the icon button is never below a 44px touch target: the smallest allowed icon still gives 44px", () => {
-  const min = SPEC.collectionPage.iconSize.min;
-  assert.ok(Math.max(44, min + 22) === 44 && SPEC.collectionPage.iconSize.max + 22 >= 44);
+test("the Icon size setting sizes the whole round button (twice the icon, square, heart centred), and taps keep a 44px area", () => {
+  const { min, max } = SPEC.collectionPage.iconSize;
   const css = fs.readFileSync("extensions/konvert-wishlist/assets/konvert-wishlist.css", "utf8");
-  assert.match(css, /width: max\(44px, calc\(var\(--kw-collection-page-icon-size, 22\) \* 1px \+ 22px\)\)/);
+  const rule = css.match(/\.kw-btn--card \{[^}]*\}/)[0];
+  assert.match(rule, /width: calc\(var\(--kw-collection-page-icon-size, 22\) \* 2px\);/);
+  assert.match(rule, /height: calc\(var\(--kw-collection-page-icon-size, 22\) \* 2px\);/, "same expression for height: a circle, never an oval");
+  assert.equal(/max\(44px, calc/.test(rule), false, "no 44px floor hides the setting any more");
+  assert.match(rule, /display: inline-flex;[^}]*align-items: center;[^}]*justify-content: center;/, "the heart is centred by the button itself");
+  assert.match(css, /\.kw-btn--card \.kw-heart \{\s*width: calc\(var\(--kw-collection-page-icon-size, 22\) \* 1px\);\s*height: calc\(var\(--kw-collection-page-icon-size, 22\) \* 1px\);/, "the heart is exactly half the circle");
+  assert.match(css, /\.kw-btn--card::after \{[^}]*width: max\(100%, 44px\);[^}]*height: max\(100%, 44px\);/, "tap area is at least 44px");
+  // every allowed size gives a different button, the default is still the old 44px, and the biggest stays sane
+  const button = (icon) => icon * 2;
+  const sizes = Array.from({ length: max - min + 1 }, (_, i) => button(min + i));
+  assert.equal(new Set(sizes).size, sizes.length, "each step of the setting changes the button");
+  assert.equal(button(SPEC.collectionPage.iconSize.default ?? 22), 44, "the default look is unchanged");
+  assert.ok(sizes[0] >= 28 && sizes.at(-1) <= 80);
 });
 
 test("oversized, malformed and non-object input is refused as a whole", () => {
@@ -368,9 +379,10 @@ const runApp = (url, code) =>
   );
 
 dbTest("migration: additive and nullable; existing shops, settings, ids and constraints survive; the app copes before and after", async () => {
-  const dirs = migrationDirs();
+  // Later migrations (analytics, ...) are independent of this one: it is judged against the schema it was added to.
+  const dirs = migrationDirs().filter((dir) => dir <= "20261023170000_wishlist_appearance");
   const last = dirs.at(-1);
-  assert.equal(last, "20261023170000_wishlist_appearance", "it is the newest migration, applied after all earlier ones");
+  assert.equal(last, "20261023170000_wishlist_appearance", "it is the newest of the migrations that existed when it was added, applied after all earlier ones");
   assert.equal(dirs.length, 7);
   assert.match(fs.readFileSync(`prisma/migrations/${last}/migration.sql`, "utf8").replace(/--.*\n/g, "").trim(), /^ALTER TABLE `ShopSettings` ADD COLUMN `wishlistAppearance` JSON NULL;$/, "exactly one statement, no data change");
 

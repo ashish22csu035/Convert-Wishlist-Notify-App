@@ -106,11 +106,12 @@ model Shop {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  settings      ShopSettings?
-  actors        Actor[]
-  availability  VariantAvailability[]
-  orders        ShopifyOrder[]
-  webhookEvents WebhookEvent[]
+  settings       ShopSettings?
+  actors         Actor[]
+  availability   VariantAvailability[]
+  orders         ShopifyOrder[]
+  webhookEvents  WebhookEvent[]
+  analyticsDaily AnalyticsDaily[]
 }
 
 model ShopSettings {
@@ -128,6 +129,11 @@ model ShopSettings {
   // { version, general?, productPage?, collectionPage?, wishlistPage? } holding only what the merchant changed.
   // NULL, empty or unreadable means "today's look". Saved apart from the two switches and the email columns.
   wishlistAppearance    Json?
+  // Dashboard setup checklist: { embedConfirmed, productConfirmed, dismissed } (see app/utils/onboarding-shared.js). NULL = nothing yet.
+  onboarding            Json?
+  // Notify Me Settings: { version, button?: {text, style, bgColor, textColor}, email?: {subject, heading, body, ctaLabel} }
+  // (see app/utils/notify-settings-shared.js). NULL = defaults; the older email columns above remain a fallback.
+  notifyMeSettings      Json?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -254,6 +260,37 @@ model ActivityEvent {
   @@index([shopId, type, occurredAt])
   @@index([actorId, type, occurredAt])
   @@index([browsingSessionId])
+}
+
+// One row per shop per UTC calendar day: the Analytics numbers of that day (see calculateAnalyticsDay in
+// app/models/analytics-daily.server.js). Event counts are additive across days; session counts are NOT (a session
+// that crosses midnight counts on both days). A NULL session count means "unavailable": that day holds events of that
+// kind that carry no session, the same rule the Analytics screen uses. Today's row is partial and is recalculated by
+// the worker every run.
+model AnalyticsDaily {
+  id                      String   @id @default(uuid()) @db.Char(36)
+  shopId                  String   @db.Char(36)
+  day                     DateTime @db.Date
+  wishlistAdded           Int      @default(0)
+  wishlistRemoved         Int      @default(0)
+  wishlistProductClicked  Int      @default(0)
+  notifySubscribed        Int      @default(0)
+  restockEmailSent        Int      @default(0)
+  wishlistSessions        Int?
+  notifyMeSessions        Int?
+  // Added later. notifyUnsubscribed is NULL on rows written before it existed: such a row is not a finished summary
+  // (the Analytics page ignores it and the worker recalculates it). The "carried" counts are the sessions of this day
+  // that also had qualifying events on the PREVIOUS day (a session lasts 30 minutes, so at most two days). They make
+  // range-wide distinct sessions exact: sum(sessions) - sum(carried, every day of the range except its first).
+  notifyUnsubscribed      Int?
+  wishlistSessionsCarried Int?
+  notifyMeSessionsCarried Int?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, day])
 }
 
 // One restock email attempt for one subscription in one restock cycle.

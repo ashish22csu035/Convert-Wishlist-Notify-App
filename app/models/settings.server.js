@@ -1,5 +1,7 @@
 import prisma from "../db.server";
 import { DEFAULT_SETTINGS, FEATURE_FIELDS, validateSettings } from "../utils/settings-shared";
+import { applyOnboardingIntent, normalizeOnboarding } from "../utils/onboarding-shared";
+import { effectiveNotify, mergeNotify, publicNotifyButton, toSparseNotify, validateNotify } from "../utils/notify-settings-shared";
 import { mergeAppearance, normalizeStored, publicAppearance, resolveAppearance, toSparse, validateAppearance } from "../utils/wishlist-appearance-shared";
 
 // Merchant settings, stored in ShopSettings: the Wishlist and Notify Me switches. They are independent.
@@ -85,17 +87,84 @@ export async function saveAppearance(shopDomain, input) {
   return { ok: true, errors: {}, appearance: resolveAppearance(document) };
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Dashboard setup checklist (ShopSettings.onboarding). Only this column is written, by shop DOMAIN from the
+// authenticated session, so one shop can never read or change another shop's checklist.
+// ---------------------------------------------------------------------------------------------------------
+
+// { state, appearanceSaved } for the checklist. "Wishlist Settings were saved" is the existing wishlistAppearance column.
+export async function getOnboarding(shopId) {
+  const row = shopId ? await prisma.shopSettings.findUnique({ where: { shopId }, select: { onboarding: true, wishlistAppearance: true } }) : null;
+  return { state: normalizeOnboarding(row?.onboarding), appearanceSaved: row?.wishlistAppearance != null };
+}
+
+// Applies one intent. Returns the new state, or null for an unknown intent (nothing written).
+export async function saveOnboardingIntent(shopDomain, intent) {
+  const next = applyOnboardingIntent(null, intent);
+  if (!next) return null;
+  const shop = await prisma.shop.upsert({
+    where: { domain: shopDomain },
+    create: { domain: shopDomain, currencyCode: UNKNOWN_CURRENCY },
+    update: {},
+    select: { id: true, settings: { select: { onboarding: true } } },
+  });
+  const state = applyOnboardingIntent(shop.settings?.onboarding, intent);
+  await prisma.shopSettings.upsert({ where: { shopId: shop.id }, create: { shopId: shop.id, onboarding: state }, update: { onboarding: state } });
+  return state;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Notify Me Settings (ShopSettings.notifyMeSettings). Same rules as the appearance above: shop DOMAIN from the
+// authenticated session, only this column is written, never the switches or the legacy email columns.
+// ---------------------------------------------------------------------------------------------------------
+
+// The complete settings for the screen: the stored document, the older email columns filling anything it lacks, then defaults.
+export async function getNotifySettings(shopDomain) {
+  const shop = shopDomain
+    ? await prisma.shop.findUnique({ where: { domain: shopDomain }, select: { settings: { select: { notifyMeSettings: true, emailSubject: true, emailBody: true, buttonLabel: true } } } })
+    : null;
+  return effectiveNotify(shop?.settings?.notifyMeSettings ?? null, shop?.settings ?? null);
+}
+
+// `input` is the JSON text (or object) the screen sent. Returns { ok: true, errors: {}, settings } with the complete saved
+// settings, or { ok: false, errors }. Saving never sends anything: the emails are sent only by the restock worker.
+export async function saveNotifySettings(shopDomain, input) {
+  const { values, errors } = validateNotify(input);
+  if (Object.keys(errors).length) return { ok: false, errors };
+  const shop = await prisma.shop.upsert({
+    where: { domain: shopDomain },
+    create: { domain: shopDomain, currencyCode: UNKNOWN_CURRENCY },
+    update: {},
+    select: { id: true, settings: { select: { notifyMeSettings: true, emailSubject: true, emailBody: true, buttonLabel: true } } },
+  });
+  // Start from what the screen showed (stored values plus legacy fallbacks) so nothing the merchant could see is lost.
+  const base = effectiveNotify(shop.settings?.notifyMeSettings ?? null, shop.settings ?? null);
+  const document = toSparseNotify(mergeNotify(base, values));
+  await prisma.shopSettings.upsert({
+    where: { shopId: shop.id },
+    create: { shopId: shop.id, notifyMeSettings: document },
+    update: { notifyMeSettings: document },
+  });
+  return { ok: true, errors: {}, settings: effectiveNotify(document, null) };
+}
+
 // What GET /api/features answers: the two switches (exactly as getFeatureFlags) plus the public appearance, in one
 // read. If the appearance column cannot be read, the switches are still answered, so a Wishlist the merchant
 // switched off never reappears because of an appearance problem.
+// Only present once the merchant has customised the button, so an untouched shop's answer is exactly what it was before.
+const notifyButtonPart = (raw) => {
+  const button = publicNotifyButton(raw);
+  return Object.keys(button).length ? { notifyButton: button } : {};
+};
+
 export async function getStorefrontFeatures(shopDomain) {
   try {
     const shop = await prisma.shop.findUnique({
       where: { domain: shopDomain },
-      select: { settings: { select: { wishlistEnabled: true, notifyMeEnabled: true, wishlistAppearance: true } } },
+      select: { settings: { select: { wishlistEnabled: true, notifyMeEnabled: true, wishlistAppearance: true, notifyMeSettings: true } } },
     });
     const flags = pick(shop?.settings ?? null);
-    return { wishlist: flags.wishlistEnabled, notifyMe: flags.notifyMeEnabled, appearance: publicAppearance(shop?.settings?.wishlistAppearance) };
+    return { wishlist: flags.wishlistEnabled, notifyMe: flags.notifyMeEnabled, appearance: publicAppearance(shop?.settings?.wishlistAppearance), ...notifyButtonPart(shop?.settings?.notifyMeSettings) };
   } catch (error) {
     console.error("[wishlist] appearance unavailable, answering the switches only", error?.code ?? error?.name ?? "error");
     return { ...(await getFeatureFlags(shopDomain)), appearance: publicAppearance(null) };

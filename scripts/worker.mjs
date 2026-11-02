@@ -40,6 +40,8 @@ const { createWorker } = await import("../app/worker/worker.server.js");
 const { queueSnapshot } = await import("../app/models/email-delivery.server.js");
 const { getShopAdmin } = await import("../app/models/shopify-lookup.server.js");
 const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
+const { runAnalyticsDaily } = await import("../app/worker/analytics-daily.server.js");
+const { closeCache } = await import("../app/utils/cache.server.js");
 const { default: prisma } = await import("../app/db.server.js");
 
 const transport = createTransport(config.smtp);
@@ -83,11 +85,23 @@ try {
   if (left.unknown) {
     console.log(`[worker] ${left.unknown} job(s) have an UNKNOWN result and are never resent automatically: check them by hand.`);
   }
+
+  // Daily analytics summaries, after the emails so they can never delay them. Bounded per run; what is left, and any
+  // day that failed, is picked up by the next run. A failure here is logged but does not fail the email run.
+  if (!signal) {
+    try {
+      const done = await runAnalyticsDaily({ shouldStop: () => signal !== null });
+      console.log(`[worker] analytics daily summaries: ${done.written} written, ${done.stale} already newer, ${done.failed} failed (${done.shops} shop(s))${done.stopped ? ", stopped early" : ""}`);
+    } catch (error) {
+      console.error(`[worker] analytics daily summaries failed: ${error?.code ?? error?.name ?? "error"}`);
+    }
+  }
 } catch (error) {
   console.error(`[worker] failed: ${error?.code ?? error?.name ?? "error"}`);
   exitCode = 1;
 } finally {
   transport.close();
+  await closeCache().catch(() => {}); // only open if the analytics step touched Redis
   await prisma.$disconnect().catch(() => {});
 }
 process.exit(signal ? (exitCode || (signal === "SIGINT" ? 130 : 143)) : exitCode);

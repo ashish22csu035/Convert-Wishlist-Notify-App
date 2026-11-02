@@ -48,7 +48,7 @@ test("every breakpoint is one the stylesheet already used: no competing system",
 
 test("the phone rules live only inside the phone media query", () => {
   assert.ok(phone, "one block holds the phone rules");
-  for (const selector of [".kv-chart-scroll", ".kv-info-panel", ".kv-range-custom label", ".kv-toolbar > div:not(.grow)", ".kv-product-title", ".kv-kpis > .has-seg"]) {
+  for (const selector of [".kv-chart-scroll", ".kv-info-panel", ".kv-cal-day", ".kv-toolbar > div:not(.grow)", ".kv-product-title", ".kv-kpis > .has-seg"]) {
     assert.ok(phone.body.includes(selector), `${selector} is adjusted for phones`);
   }
   assert.equal(base.includes(".kv-chart-scroll"), false, "the chart wrapper has no desktop style: it adds nothing on a wide screen");
@@ -91,9 +91,8 @@ test("overflow is never hidden to cover a layout problem; the chart scrolls insi
   assert.match(phone.body, /\.kv-chart text \{\s*font-size: 12px;/, "axis labels stay readable at the scaled size");
 });
 
-test("phone controls: date inputs stack, buttons are touch-sized, long names wrap, the popover stays on screen", () => {
-  assert.match(phone.body, /\.kv-range-apply \{\s*min-height: 40px;/);
-  assert.match(phone.body, /\.kv-range-custom input\[type="date"\] \{\s*width: 100%;\s*min-width: 0;/);
+test("phone controls: calendar days are touch-sized, buttons are touch-sized, long names wrap, the popover stays on screen", () => {
+  assert.match(phone.body, /\.kv-range-apply,\s*\.kv-cal-cancel,\s*\.kv-cal-day,\s*\.kv-cal-nav \{\s*min-height: 40px;/, "Apply, Cancel, calendar days and arrows are touch-sized");
   assert.match(phone.body, /\.kv-product-title \{\s*white-space: normal;\s*overflow-wrap: anywhere;/);
   assert.match(phone.body, /\.kv-info-panel \{\s*position: fixed;\s*inset-inline: 12px;/);
   assert.match(phone.body, /\.kv-pager \{\s*flex-wrap: wrap;/);
@@ -101,7 +100,7 @@ test("phone controls: date inputs stack, buttons are touch-sized, long names wra
 });
 
 test("the two component hooks are inert on a wide screen: a plain wrapper and a class name", () => {
-  assert.match(fs.readFileSync("app/components/activity-chart.jsx", "utf8"), /<div className="kv-chart-scroll">\s*<svg className="kv-chart"/);
+  assert.match(fs.readFileSync("app/components/activity-chart.jsx", "utf8"), /<div className="kv-chart-scroll">[\s\S]{0,600}?<div className="kv-chart-wrap"[\s\S]{0,900}?<svg className="kv-chart"/, "the scrolling box holds the chart wrapper (relative, for the tooltip) and the svg");
   assert.match(fs.readFileSync("app/components/toggle-kpi-card.jsx", "utf8"), /className=\{`kv-kpi has-seg /);
   assert.equal(/\.kv-chart-scroll|\.has-seg/.test(base), false);
 });

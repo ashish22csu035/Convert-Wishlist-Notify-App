@@ -1,6 +1,9 @@
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { authenticate } from "../shopify.server";
 import { loadMerchantContext } from "../utils/merchant.server";
+import { getOnboarding, saveOnboardingIntent } from "../models/settings.server";
+import { SetupChecklist } from "../components/setup-checklist";
 import { getAttribution, getDashboard, hasOrderScope } from "../models/reporting.server";
 import { describeItem, fetchCatalog } from "../models/catalog.server";
 import { ActivitySwitch } from "../components/activity-switch";
@@ -20,7 +23,6 @@ import {
   ToggleKpiCard,
   WISHLIST_ITEM_MODES,
   attributionView,
-  deltaOf,
   formatMoney,
   formatNumber,
   timeAgo,
@@ -28,8 +30,14 @@ import {
 } from "../components/merchant-ui";
 
 export const loader = async ({ request }) => {
-  const { admin, scope, shop, days, period, view } = await loadMerchantContext(request);
+  const { admin, scope, shop, domain, days, period, view } = await loadMerchantContext(request);
   if (!shop) return { days, period: view, dashboard: null };
+  // The setup checklist is a convenience: if its data cannot be read (for example the migration has not been applied
+  // yet) the Dashboard still loads, without the checklist.
+  const onboarding = await getOnboarding(shop.id).catch((error) => {
+    console.error("[dashboard] the setup checklist could not be loaded", error?.code ?? error?.name ?? "error");
+    return null;
+  });
   const dashboard = await getDashboard(shop, period);
   const attribution = await getAttribution(shop.id, period, { scopeGranted: hasOrderScope(scope) });
   const catalog = await fetchCatalog(admin, {
@@ -39,6 +47,8 @@ export const loader = async ({ request }) => {
   return {
     days,
     period: view,
+    // eslint-disable-next-line no-undef
+    setup: onboarding ? { ...onboarding, shop: domain, apiKey: process.env.SHOPIFY_API_KEY || "" } : null,
     dashboard: {
       ...dashboard,
       attribution,
@@ -50,6 +60,19 @@ export const loader = async ({ request }) => {
   };
 };
 
+// One checklist change per request (confirm / undo a step, dismiss, show again). The shop comes from the Admin session.
+export const action = async ({ request }) => {
+  const { session } = await authenticate.admin(request);
+  const intent = (await request.formData()).get("intent");
+  try {
+    const state = typeof intent === "string" ? await saveOnboardingIntent(session.shop, intent) : null;
+    return { ok: Boolean(state) };
+  } catch (error) {
+    console.error("[dashboard] the setup checklist could not be saved", error?.code ?? error?.name ?? "error");
+    return { ok: false };
+  }
+};
+
 const feedText = (event) => {
   const info = eventInfo(event.type);
   const name = event.item.title ? `“${event.item.title}”${event.item.variantTitle ? ` (${event.item.variantTitle})` : ""}` : "a product";
@@ -58,7 +81,7 @@ const feedText = (event) => {
 };
 
 export default function Dashboard() {
-  const { days, period, dashboard: d } = useLoaderData();
+  const { period, setup, dashboard: d } = useLoaderData();
   const words = describePeriod(period);
   if (!d) {
     return (
@@ -68,7 +91,6 @@ export default function Dashboard() {
     );
   }
   const w = d.activity.window;
-  const p = d.activity.previous;
   const revenue = attributionView(d.attribution, period);
   const nothingYet = d.series.days.length === 0 || Object.values(d.activity.allTime).every((n) => n === 0);
 
@@ -83,16 +105,18 @@ export default function Dashboard() {
           initial="active"
           hint="Active: items customers have saved right now. All-time: every add ever recorded, including items later removed. Neither depends on the date range."
         />
-        <KpiCard label="Unique Wishlist users" value={d.wishlistUsers.current} icon="person" tone="violet" delta={deltaOf(d.wishlistUsers.current, d.wishlistUsers.previous)} days={days} note={d.wishlistUsers.previous === null ? words.label : undefined} hint="Different logged-in customers who saved, removed or opened a Wishlist item in the date range." />
-        <KpiCard label="Wishlist sessions" value={d.sessions.current} icon="chart-line" tone="violet" delta={deltaOf(d.sessions.current, d.sessions.previous)} days={days} note={d.sessions.previous === null ? `${words.label} · 30-minute sessions` : "30-minute sessions"} hint="A session is one customer's Wishlist visit; it lasts a fixed 30 minutes from its start. Counted inside the date range." />
+        <KpiCard label="Unique Wishlist users" value={d.wishlistUsers.current} icon="person" tone="violet" note={words.label} hint="Different logged-in customers who saved, removed or opened a Wishlist item in the date range." />
+        <KpiCard label="Wishlist sessions" value={d.sessions.current} icon="chart-line" tone="violet" note={`${words.label} · 30-minute sessions`} hint="A session is one customer's Wishlist visit; it lasts a fixed 30 minutes from its start. Counted inside the date range." />
         <KpiCard label="Active Notify Me subscriptions" value={d.subscriptions.ACTIVE} icon="notification" tone="blue" note={`Current total · ${formatNumber(w.NOTIFY_SUBSCRIBED)} new ${words.within}`} hint="Customers who are right now waiting for a sold-out item to come back. This is a current total, not a count for the date range." />
-        <KpiCard label="Restock emails sent" value={w.RESTOCK_EMAIL_SENT} icon="email" tone="blue" delta={p ? deltaOf(w.RESTOCK_EMAIL_SENT, p.RESTOCK_EMAIL_SENT) : null} days={days} note={`${formatNumber(d.deliveries.FAILED + d.deliveries.UNKNOWN)} failed or unknown · ${formatNumber(d.deliveries.PENDING + d.deliveries.SENDING)} queued (all time)`} hint="Restock emails accepted by the mail server in the date range. Accepted does not confirm the email reached the inbox or was opened." />
+        <KpiCard label="Restock emails sent" value={w.RESTOCK_EMAIL_SENT} icon="email" tone="blue" note={`${formatNumber(d.deliveries.FAILED + d.deliveries.UNKNOWN)} failed or unknown · ${formatNumber(d.deliveries.PENDING + d.deliveries.SENDING)} queued (all time)`} hint="Restock emails accepted by the mail server in the date range. Accepted does not confirm the email reached the inbox or was opened." />
         {revenue.options ? (
           <ToggleKpiCard label="Attributed revenue" icon="cart" tone="green" options={revenue.options} initial="overall" hint="Eligible Wishlist saves and successful Notify Me restock emails can remain attributable for the customer's lifetime, subject to existing matching and removal rules. The 7-day window applies only to qualifying Add to Cart activity from My Wishlist." />
         ) : (
           <KpiCard label="Attributed revenue" value={null} display={revenue.setup.display} icon="cart" note={revenue.setup.note} hint="Eligible Wishlist saves and successful Notify Me restock emails can remain attributable for the customer's lifetime, subject to existing matching and removal rules. The 7-day window applies only to qualifying Add to Cart activity from My Wishlist." />
         )}
       </Grid>
+
+      {setup ? <SetupChecklist setup={setup} /> : null}
 
       <Split>
         <Card title="Activity" action={{ to: "/app/analytics", label: "View analytics" }}>

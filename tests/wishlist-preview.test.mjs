@@ -108,7 +108,12 @@ test("the Wishlist page sample is built like the page script builds it", () => {
 test("sample pages hold only invented, inert content", () => {
   for (const tab of [...TABS, "unknown"]) {
     const html = previewMarkup(tab);
-    assert.doesNotMatch(html, /<script|<form|<iframe|<link|<object|<embed|\ssrc=|srcset=|on\w+\s*=/i, `${tab}: nothing executable or loadable`);
+    assert.doesNotMatch(html, /<script|<form|<iframe|<link|<object|<embed|srcset=|on\w+\s*=/i, `${tab}: nothing executable or loadable`);
+    // The only loadable things are the sample product photos: <img> tags for static files in public/preview-products/ on the app's own origin.
+    for (const [tag, src] of [...html.matchAll(/<(\w+)[^>]*\ssrc="([^"]*)"/g)].map((m) => [m[1], m[2]])) {
+      assert.equal(tag, "img", `${tab}: only images load`);
+      assert.match(src, /^\/preview-products\/[a-z]+\.jpg$/, `${tab}: ${src} is a bundled sample photo`);
+    }
     assert.doesNotMatch(html, /href="(?!#")/, `${tab}: links go nowhere`);
     assert.doesNotMatch(html, /gid:\/\/|@[a-z]+\.[a-z]|myshopify|https?:\/\//i, `${tab}: no shop, customer or product data`);
     for (const button of html.match(/<button[^>]*>/g) ?? []) assert.match(button, /type="button"/, `${tab}: ${button}`);
@@ -117,10 +122,13 @@ test("sample pages hold only invented, inert content", () => {
   assert.doesNotMatch(previewShell("a{}"), /@import|https?:/);
 });
 
-test("the touch target never drops below 44px for any icon size, in the same CSS the storefront uses", () => {
-  assert.ok(css.includes("width: max(44px, calc(var(--kw-collection-page-icon-size, 22) * 1px + 22px));"));
-  assert.ok(css.includes("height: max(44px, calc(var(--kw-collection-page-icon-size, 22) * 1px + 22px));"));
-  for (const size of [14, 22, 40]) assert.ok(Math.max(44, size + 22) >= 44);
+test("the preview and the storefront size the collection button by the same CSS: twice the icon, with a tap area of at least 44px", () => {
+  // The preview iframe is given this very stylesheet (virtual:konvert-storefront-css), so one rule serves both.
+  assert.ok(css.includes("width: calc(var(--kw-collection-page-icon-size, 22) * 2px);"));
+  assert.ok(css.includes("height: calc(var(--kw-collection-page-icon-size, 22) * 2px);"));
+  assert.equal(css.includes("max(44px, calc(var(--kw-collection-page-icon-size"), false, "no 44px floor: every step of the setting changes the button");
+  assert.match(css, /\.kw-btn--card::after \{[^}]*width: max\(100%, 44px\);[^}]*height: max\(100%, 44px\);/);
+  for (const size of [14, 22, 40]) assert.equal(size * 2 >= 28, true);
 });
 
 test("preview widths are real storefront widths on either side of the storefront's own breakpoint", () => {

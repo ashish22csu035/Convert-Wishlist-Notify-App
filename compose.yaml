@@ -1,30 +1,4 @@
-cat > compose.yaml <<'EOF'
 services:
-  db:
-    image: mysql:8.4
-    env_file:
-      - .env.db
-    command:
-      - --innodb-buffer-pool-size=96M
-      - --max-connections=20
-      - --performance-schema=OFF
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-    volumes:
-      - mysql_data:/var/lib/mysql
-    restart: unless-stopped
-    init: true
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - 'mysqladmin ping -h 127.0.0.1 -uroot -p"$${MYSQL_ROOT_PASSWORD}" --silent'
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 60s
-
-
-
   web:
     image: konvert-wishlist-notify:local
     build:
@@ -36,9 +10,7 @@ services:
       NODE_ENV: production
       HOST: "0.0.0.0"
       PORT: "3000"
-    depends_on:
-      db:
-        condition: service_healthy
+      REDIS_URL: redis://redis:6379
     ports:
       - "127.0.0.1:3000:3000"
     restart: unless-stopped
@@ -54,8 +26,6 @@ services:
       retries: 3
       start_period: 20s
 
-
-
   worker:
     image: konvert-wishlist-notify:local
     build:
@@ -66,16 +36,28 @@ services:
     environment:
       NODE_ENV: production
       WORKER_SKIP_DOTENV: "1"
-    depends_on:
-      db:
-        condition: service_healthy
+      REDIS_URL: redis://redis:6379
     command: ["node", "app/worker/cron.js"]
     restart: unless-stopped
     init: true
     stop_grace_period: 50s
 
-
-
+  # Analytics cache only: nothing is kept on disk and no host port is published. The app works without it
+  # (REDIS_URL unset, or Redis down, means the reports are simply calculated every time).
+      # Analytics cache only: Redis data is held in memory.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      
   migrate:
     image: konvert-wishlist-notify:local
     build:
@@ -85,14 +67,7 @@ services:
       - .env.runtime
     environment:
       NODE_ENV: production
-    depends_on:
-      db:
-        condition: service_healthy
     command: ["./node_modules/.bin/prisma", "migrate", "deploy"]
     profiles:
       - operations
     restart: "no"
-
-volumes:
-  mysql_data:
-EOF

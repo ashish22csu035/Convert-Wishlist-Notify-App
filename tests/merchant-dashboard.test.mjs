@@ -138,7 +138,8 @@ test("wishlist products: grouped per variant, ranked, searchable, sortable and p
   assert.equal((await reporting.getWishlistProducts(shop.id, { page: 2 })).rows.length, 4);
 
   assert.equal((await reporting.getWishlistProducts(shop.id, { sort: "recent" })).rows[0].productId, "11");
-  assert.equal((await reporting.getWishlistProducts(shop.id, { sort: "name" })).rows[0].fallbackTitle, "Filler 00");
+  // The retired "name" sort falls back to Most saved.
+  assert.equal((await reporting.getWishlistProducts(shop.id, { sort: "name" })).rows[0].fallbackTitle, "Popular hat");
 
   const found = await reporting.getWishlistProducts(shop.id, { q: "scarf" });
   assert.deepEqual(found.rows.map((r) => r.productId), ["11"]);

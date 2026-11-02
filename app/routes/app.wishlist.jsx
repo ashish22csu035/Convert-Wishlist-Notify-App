@@ -3,10 +3,12 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { describePeriod } from "../utils/period";
 import { loadMerchantContext } from "../utils/merchant.server";
 import { cleanQuery, getAttribution, getWishlistActivity, getWishlistOverview, getWishlistProducts, hasOrderScope, parseChoice } from "../models/reporting.server";
-import { describeItem, fetchCatalog } from "../models/catalog.server";
+import { describeItem, fetchCatalog, fetchShopCurrency } from "../models/catalog.server";
+import { maskedCustomerEmails } from "../models/customer-emails.server";
 import { WISHLIST_ACTIVITY_FILTERS, WISHLIST_SORTS } from "../utils/dashboard-constants";
 import {
   Card,
+  CustomerLink,
   eventInfo,
   EmptyState,
   Grid,
@@ -39,12 +41,14 @@ export const loader = async ({ request }) => {
   const sort = parseChoice(params.get("sort"), WISHLIST_SORTS, "saves");
   const overview = await getWishlistOverview(shop.id, period);
   const attribution = await getAttribution(shop.id, period, { scopeGranted: hasOrderScope(scope) });
+  const storeCurrency = await fetchShopCurrency(admin);
   const type = parseChoice(params.get("type"), WISHLIST_ACTIVITY_FILTERS, "all");
 
   if (tab === "activity") {
     const list = await getWishlistActivity(shop.id, { page, days: period, type });
     const catalog = await fetchCatalog(admin, { productGids: list.rows.map((r) => r.productGid), variantGids: list.rows.map((r) => r.variantGid) });
-    return { days, period: view, tab, page, overview, attribution, type, q, sort, total: list.total, rows: list.rows.map((row) => ({ ...row, item: describeItem(catalog, row) })), catalogAvailable: catalog.available };
+    const emails = await maskedCustomerEmails(admin, shop.id, list.rows.map((r) => r.customerId));
+    return { days, period: view, tab, page, overview, attribution, storeCurrency, type, q, sort, total: list.total, emails, rows: list.rows.map((row) => ({ ...row, item: describeItem(catalog, row) })), catalogAvailable: catalog.available };
   }
 
   const list = await getWishlistProducts(shop.id, { q, sort, page });
@@ -56,6 +60,7 @@ export const loader = async ({ request }) => {
     page,
     overview,
     attribution,
+    storeCurrency,
     q,
     sort,
     total: list.total,
@@ -69,7 +74,7 @@ export default function WishlistPage() {
   const data = useLoaderData();
   const { period, tab, page, overview } = data;
   const words = describePeriod(period);
-  const revenue = attributionView(data.attribution, period);
+  const revenue = attributionView(data.attribution, period, data.storeCurrency);
   const revenueOption = revenue.options?.find((option) => option.key === "wishlist");
   const revenueSetup = revenue.setup;
   return (
@@ -162,9 +167,7 @@ export default function WishlistPage() {
                           </s-table-cell>
                           <s-table-cell>{eventInfo(row.type).label}</s-table-cell>
                           <s-table-cell>
-                            <s-link href={`shopify://admin/customers/${row.customerId}`}>
-                              <span className="kv-id">Customer {row.customerId}</span>
-                            </s-link>
+                            <CustomerLink customerId={row.customerId} emails={data.emails} />
                           </s-table-cell>
                           <s-table-cell>{formatDate(row.occurredAt)}</s-table-cell>
                         </s-table-row>

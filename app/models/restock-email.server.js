@@ -1,4 +1,5 @@
 import { addressOf } from "./mail-config.server";
+import { effectiveNotify, renderNotifyEmail } from "../utils/notify-settings-shared";
 
 // Builds the back-in-stock email. Pure: everything comes in as arguments. Returns null when the
 // required product information is missing, so nothing is ever sent with an invented title or link.
@@ -6,9 +7,6 @@ import { addressOf } from "./mail-config.server";
 const clean = (value, max) =>
   // eslint-disable-next-line no-control-regex
   String(value ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
-
-const escapeHtml = (value) =>
-  String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 // https product link for the exact variant, from Shopify's own storefront URL when it has one,
 // otherwise from the shop's domain and the product handle.
@@ -38,30 +36,22 @@ export function buildRestockEmail({ shop, settings, product, variantGid, recipie
 
   const variant = clean(product.variantTitle, 100);
   const name = variant && variant.toLowerCase() !== "default title" ? `${title} (${variant})` : title;
-  const fill = (template) => String(template).replace(/\{\{\s*product\s*\}\}/gi, name);
-
-  const subject = clean(settings?.emailSubject ? fill(settings.emailSubject) : `${name} is back in stock`, 150) || `${title} is back in stock`;
-  const intro = settings?.emailBody ? clean(fill(settings.emailBody), 1000) : `Good news! ${name} is back in stock.`;
-  const button = clean(settings?.buttonLabel, 40) || "View product";
-  const sender = clean(settings?.senderName, 100) || clean(shop?.name, 100) || shop?.domain || "";
+  // The merchant's Notify Me Settings (ShopSettings.notifyMeSettings), with the older email columns as the fallback.
+  // The variables come from data this flow really has; there is no customer name (only the email address is stored).
+  const email = effectiveNotify(settings?.notifyMeSettings, settings).email;
+  const shopName = clean(shop?.name, 100) || shop?.domain || "";
+  const rendered = renderNotifyEmail(email, { product: name, product_url: link, shop_name: shopName }, unsubscribeLink, `${title} is back in stock`);
+  const sender = clean(settings?.senderName, 100) || shopName;
   const reply = settings?.replyToEmail ? addressOf(settings.replyToEmail) : null;
-  const footer = "You are receiving this email because you asked to be notified when this item was back in stock.";
-
-  const text = `${intro}\n\n${button}: ${link}\n\n${footer}\nUnsubscribe: ${unsubscribeLink}\n`;
-  const html =
-    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.5;color:#1a1a1a;max-width:560px">` +
-    `<p>${escapeHtml(intro)}</p>` +
-    `<p><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 20px;background:#000;color:#fff;text-decoration:none;border-radius:4px">${escapeHtml(button)}</a></p>` +
-    `<p style="font-size:13px;color:#666">${escapeHtml(footer)}<br><a href="${escapeHtml(unsubscribeLink)}" style="color:#666">Unsubscribe</a></p></div>`;
 
   return {
     messageId,
     from: sender ? { name: sender, address: mailFrom } : mailFrom,
     to,
     ...(reply ? { replyTo: reply } : {}),
-    subject,
-    text,
-    html,
+    subject: rendered.subject,
+    text: rendered.text,
+    html: rendered.html,
     headers: {
       "List-Unsubscribe": `<${unsubscribeLink}>`,
       "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",

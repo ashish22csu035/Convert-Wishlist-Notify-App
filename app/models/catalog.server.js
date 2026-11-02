@@ -2,7 +2,9 @@
 // shop's Admin API. Nothing is stored, and nothing is invented: when Shopify cannot be reached, or a
 // product or variant no longer exists, the screens fall back to the ids they already hold.
 
-const CATALOG_QUERY = `#graphql
+import { validCurrency } from "../utils/format.js";
+
+const CATALOG_QUERY =`#graphql
   query KonvertCatalog($ids: [ID!]!) {
     shop { currencyCode }
     nodes(ids: $ids) {
@@ -65,6 +67,21 @@ export async function fetchCatalog(admin, { productGids = [], variantGids = [] }
     return { ...EMPTY, products: {}, variants: {} };
   }
   return result;
+}
+
+// The authenticated shop's own currency (Shop.currencyCode), or null when Shopify cannot be reached.
+// `admin` comes from authenticate.admin, so the shop is never taken from the request.
+export async function fetchShopCurrency(admin) {
+  if (!admin) return null;
+  try {
+    const response = await admin.graphql(`#graphql
+      query KonvertShopCurrency { shop { currencyCode } }
+    `);
+    const json = await response.json();
+    return validCurrency(json?.data?.shop?.currencyCode);
+  } catch {
+    return null;
+  }
 }
 
 // What to show for a product/variant pair. `fallback` is the title kept in our own database, if any.

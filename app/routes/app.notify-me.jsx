@@ -4,7 +4,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { describePeriod } from "../utils/period";
 import { loadMerchantContext } from "../utils/merchant.server";
 import { getAttribution, getDeliveries, getNotifyOverview, getSubscriptions, hasOrderScope, parseChoice } from "../models/reporting.server";
-import { describeItem, fetchCatalog } from "../models/catalog.server";
+import { describeItem, fetchCatalog, fetchShopCurrency } from "../models/catalog.server";
 import { DELIVERY_FILTERS, SUBSCRIPTION_FILTERS } from "../utils/dashboard-constants";
 import {
   Card,
@@ -40,6 +40,7 @@ export const loader = async ({ request }) => {
 
   const overview = await getNotifyOverview(shop.id, period);
   const attribution = await getAttribution(shop.id, period, { scopeGranted: hasOrderScope(scope) });
+  const storeCurrency = await fetchShopCurrency(admin);
   const filters = tab === "emails" ? DELIVERY_FILTERS : SUBSCRIPTION_FILTERS;
   const status = parseChoice(params.get("status"), filters, "all");
   const list = tab === "emails" ? await getDeliveries(shop.id, { status, page, days: period }) : await getSubscriptions(shop.id, { status, page });
@@ -56,6 +57,7 @@ export const loader = async ({ request }) => {
     page,
     status,
     attribution,
+    storeCurrency,
     total: list.total,
     catalogAvailable: catalog.available,
     overview: { ...overview, requested: overview.requested.map(withItem), problems: overview.problems.map(withItem) },
@@ -78,8 +80,7 @@ function ItemCell({ row, catalogAvailable }) {
 
 function subscriptionReason(row) {
   if (row.status === "ACTIVE") return "Waiting for the item to come back in stock";
-  if (row.status === "FULFILLED") return "Notified: a restock email was accepted by the mail server";
-  if (row.status === "UNSUBSCRIBED") return row.unsubscribedAt ? `Customer opted out · ${formatDate(row.unsubscribedAt)}` : "Customer opted out";
+  if (row.status === "FULFILLED") return "A restock email was accepted by the mail server";
   return "—";
 }
 
@@ -90,11 +91,12 @@ function deliveryDetail(job) {
   return "—";
 }
 
-function DeliveryTable({ rows, catalogAvailable }) {
+function DeliveryTable({ rows, catalogAvailable, showEmailsSent = false }) {
   return (
     <s-table>
       <s-table-header-row>
         <s-table-header listSlot="primary">Item</s-table-header>
+        {showEmailsSent ? <s-table-header format="numeric">Emails Sent</s-table-header> : null}
         <s-table-header>Status</s-table-header>
         <s-table-header format="numeric">Restock cycle</s-table-header>
         <s-table-header format="numeric">Attempts</s-table-header>
@@ -107,6 +109,7 @@ function DeliveryTable({ rows, catalogAvailable }) {
             <s-table-cell>
               <ItemCell row={job} catalogAvailable={catalogAvailable} />
             </s-table-cell>
+            {showEmailsSent ? <s-table-cell>{formatNumber(job.emailsSent)}</s-table-cell> : null}
             <s-table-cell>
               <StatusBadge status={job.status} />
             </s-table-cell>
@@ -125,7 +128,7 @@ export default function NotifyMePage() {
   const data = useLoaderData();
   const { period, tab, page, overview: o } = data;
   const words = describePeriod(period);
-  const revenue = attributionView(data.attribution, period);
+  const revenue = attributionView(data.attribution, period, data.storeCurrency);
   const revenueOption = revenue.options?.find((option) => option.key === "notifyMe");
   const revenueSetup = revenue.setup;
   const filters = tab === "emails" ? DELIVERY_FILTERS : SUBSCRIPTION_FILTERS;
@@ -180,8 +183,8 @@ export default function NotifyMePage() {
             </ul>
             <p className="kv-note" style={{ paddingTop: 8 }}>
               {tab === "emails"
-                ? `Showing emails queued ${words.within} (UTC). “Sent” means accepted by the mail server, not confirmed delivered or opened.`
-                : "Showing every subscription, newest first. This list is not limited by the date range. “Last email” is the result of the latest restock email for that subscription."}
+                ? `Showing emails queued ${words.within} (UTC). “Sent” means accepted by the mail server, not confirmed delivered or opened. “Emails Sent” counts the sent emails for that item queued ${words.within}, whatever the status filter.`
+                : "Showing every subscription that is waiting or has had an email sent, newest first. This list is not limited by the date range. “Customers Waiting” is how many customers are waiting for that item right now. “Last email” is the result of the latest restock email for that subscription."}
             </p>
             {data.rows.length === 0 ? (
               tab === "emails" ? (
@@ -190,11 +193,12 @@ export default function NotifyMePage() {
                 <EmptyState heading="No subscriptions">{data.status === "all" ? "Customers who ask to be notified about sold-out items will appear here." : "No subscriptions have this status."}</EmptyState>
               )
             ) : tab === "emails" ? (
-              <DeliveryTable rows={data.rows} catalogAvailable={data.catalogAvailable} />
+              <DeliveryTable rows={data.rows} catalogAvailable={data.catalogAvailable} showEmailsSent />
             ) : (
               <s-table>
                 <s-table-header-row>
                   <s-table-header listSlot="primary">Item</s-table-header>
+                  <s-table-header format="numeric">Customers Waiting</s-table-header>
                   <s-table-header>Status</s-table-header>
                   <s-table-header>Subscribed (UTC)</s-table-header>
                   <s-table-header>Last email</s-table-header>
@@ -206,6 +210,7 @@ export default function NotifyMePage() {
                       <s-table-cell>
                         <ItemCell row={row} catalogAvailable={data.catalogAvailable} />
                       </s-table-cell>
+                      <s-table-cell>{formatNumber(row.waitingCustomers)}</s-table-cell>
                       <s-table-cell>
                         <StatusBadge status={row.status} />
                       </s-table-cell>

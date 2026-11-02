@@ -4,16 +4,18 @@ import { Link, isRouteErrorResponse, useNavigate, useRouteError, useSearchParams
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { PAGE_SIZE, RANGE_DAYS } from "../utils/dashboard-constants";
 import { formatNumber } from "../utils/format";
-import { customPeriod, describePeriod } from "../utils/period";
+import { describePeriod } from "../utils/period";
+import { RangeCalendar } from "./range-calendar";
 import { WcField, WcSelect } from "./wc-fields";
 import "../styles/merchant.css";
 
 export { ToggleKpiCard } from "./toggle-kpi-card";
+export { popoverPosition } from "./range-calendar";
 
 // Shared building blocks for the six merchant screens. Layout, cards and charts are styled in
 // app/styles/merchant.css; controls (selects, buttons, badges, tables, banners) are Polaris web components.
 
-export { ATTRIBUTION_FOOTNOTE, STATUS_HELP, WISHLIST_ITEM_MODES, attributionView, deltaOf, deliveryReason, formatDate, formatMoney, formatNumber, timeAgo, wishlistItemsView } from "../utils/format";
+export { ATTRIBUTION_FOOTNOTE, STATUS_HELP, WISHLIST_ITEM_MODES, attributionView, deliveryReason, formatDate, formatUpdatedAt, formatMoney, formatNumber, timeAgo, wishlistItemsView } from "../utils/format";
 
 // ---------- Query-string driven controls ----------
 
@@ -51,73 +53,72 @@ export function ParamSelect({ label, param, value, options, reset = ["page"] }) 
 
 export const RANGE_OPTIONS = RANGE_DAYS.map((days) => [days, `Last ${days} days`]);
 
-// The date-range control: the presets plus "Custom range" (two UTC days, both included). A preset applies at
-// once. A custom range is checked here with the same rules the server uses (utils/period.js) and only applied
-// when valid; the server checks it again, so a hand-edited URL cannot get past it. The chosen range is always
-// written in words under the control, so the page says which days it is showing.
+// The date-range control on every page: the presets plus "Custom range" (two UTC days, both included). A preset applies
+// at once. Custom range opens the shared floating calendar (range-calendar.jsx) anchored to this control; its Apply is
+// checked with the rules the server uses (utils/period.js), and the server checks again, so a hand-edited URL cannot get
+// past it. The applied range is always written in words under the control.
 export function DateRange({ period }) {
   const navigate = useNavigate();
   const url = useUrl();
   const custom = period.kind === "custom";
-  const [open, setOpen] = useState(custom || Boolean(period.error));
-  const [from, setFrom] = useState(period.from ?? period.requested?.from ?? "");
-  const [to, setTo] = useState(period.to ?? period.requested?.to ?? "");
-  const [error, setError] = useState(period.error ?? null);
+  const anchor = useRef(null);
+  const [open, setOpen] = useState(Boolean(period.error));
 
   const choose = (chosen) => {
+    if (chosen === "applied") {
+      setOpen(false); // the range already on screen: just put the select back on it
+      return;
+    }
     if (chosen === "custom") {
       setOpen(true);
       return;
     }
     setOpen(false);
-    setError(null);
     if (!custom && chosen === String(period.days)) return; // a repeat of the current choice does nothing
     navigate(url({ days: chosen, range: null, from: null, to: null, page: null }));
   };
-  const apply = () => {
-    const result = customPeriod(from, to);
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    setError(null);
-    navigate(url({ range: "custom", from: result.period.from, to: result.period.to, days: null, page: null }));
-  };
+  const applied = custom ? { from: period.from, to: period.to } : null;
+  // A select only reports a CHANGE. Once a custom range is applied the select would already be on "Custom range", and
+  // choosing it again would say nothing, so the calendar could never be reopened. The range on screen therefore has its
+  // own option ("applied", labelled with the dates) and "Custom range" always stays a different choice from it.
+  const options = [...RANGE_OPTIONS, ...(custom ? [["applied", describePeriod(period).label]] : []), ["custom", "Custom range"]];
+  const selected = open ? "custom" : custom ? "applied" : period.days;
 
   return (
     <>
-      <div className="kv-range">
-        <WcSelect label="Date range" labelAccessibilityVisibility="exclusive" value={custom ? "custom" : open ? "custom" : period.days} options={[...RANGE_OPTIONS, ["custom", "Custom range"]]} onValue={choose} />
+      <div className="kv-range" ref={anchor}>
+        <WcSelect label="Date range" labelAccessibilityVisibility="exclusive" value={selected} options={options} onValue={choose} />
       </div>
       {open ? (
-        <form
-          className="kv-range-custom"
-          aria-label="Custom date range"
-          onSubmit={(event) => {
-            event.preventDefault();
-            apply();
+        <RangeCalendar
+          key={applied ? `${applied.from}_${applied.to}` : "new"}
+          anchorRef={anchor}
+          initial={applied}
+          notice={period.error ?? null}
+          onCancel={() => setOpen(false)}
+          onApply={({ from, to }) => {
+            setOpen(false);
+            navigate(url({ range: "custom", from, to, days: null, page: null }));
           }}
-        >
-          <label>
-            <span>Start date (UTC)</span>
-            <input type="date" name="from" value={from} onChange={(event) => setFrom(event.target.value)} aria-invalid={error ? "true" : undefined} />
-          </label>
-          <label>
-            <span>End date (UTC)</span>
-            <input type="date" name="to" value={to} onChange={(event) => setTo(event.target.value)} aria-invalid={error ? "true" : undefined} />
-          </label>
-          <button type="submit" className="kv-range-apply">
-            Apply
-          </button>
-          {error ? (
-            <p className="kv-range-error" role="alert">
-              {error}
-            </p>
-          ) : null}
-        </form>
+        />
       ) : null}
-      {custom ? <p className="kv-range-note">Showing {describePeriod(period).label}</p> : null}
+      {custom && !open ? <p className="kv-range-note">Showing {describePeriod(period).label}</p> : null}
     </>
+  );
+}
+
+// A customer in a table: the masked email when Shopify (or a Notify Me sign-up) gave one, otherwise "Customer <id>". It is
+// always the same link to the same Shopify customer page - the numeric id is what identifies the customer, never the text,
+// and it is not shown while an email is.
+// `emails` is the { [customerId]: masked email } map the route's loader built (models/customer-emails.server.js).
+export function CustomerLink({ customerId, emails }) {
+  const masked = emails?.[customerId] ?? null;
+  return (
+    <s-link href={`shopify://admin/customers/${customerId}`}>
+      <span className="kv-id">
+        {masked ?? `Customer ${customerId}`}
+      </span>
+    </s-link>
   );
 }
 
@@ -241,24 +242,22 @@ export function Split({ children }) {
 }
 
 // A metric tile. `value === null` means the figure is not available: it is labelled as such, never shown as 0.
-export function KpiCard({ label, value, display, icon, tone = "violet", delta = null, days, note, hint }) {
+export function KpiCard({ label, value, display, icon, tone = "violet", note, hint }) {
   const unavailable = value === null || value === undefined;
   const headline = display ?? (unavailable ? "Unavailable" : formatNumber(value));
-  const direction = delta === null ? null : delta > 0 ? "up" : delta < 0 ? "down" : "flat";
   return (
     <div className={`kv-kpi ${unavailable ? "muted" : tone}`}>
       <div className="kv-kpi-top">
         <span className="kv-kpi-icon">
           <s-icon type={icon} />
         </span>
-        {direction ? <span className={`kv-delta ${direction}`}>{direction === "up" ? "↑" : direction === "down" ? "↓" : "→"} {Math.abs(delta)}%</span> : null}
       </div>
       <div className={`kv-kpi-value${unavailable ? " na" : ""}`}>{headline}</div>
       <div className="kv-kpi-label">
         {label}
         <Hint label={label} text={hint} />
       </div>
-      {direction && days ? <div className="kv-kpi-note">vs previous {days} days</div> : note ? <div className="kv-kpi-note">{note}</div> : null}
+      {note ? <div className="kv-kpi-note">{note}</div> : null}
     </div>
   );
 }
@@ -351,8 +350,8 @@ export function ProductCell({ title, subtitle, imageUrl, href, fallback }) {
 // ---------- Status and activity ----------
 
 const STATUS = {
-  ACTIVE: ["info", "Active"],
-  FULFILLED: ["success", "Notified"],
+  ACTIVE: ["info", "Waiting for restock"],
+  FULFILLED: ["success", "Email sent"],
   UNSUBSCRIBED: ["neutral", "Unsubscribed"],
   PENDING: ["info", "Queued"],
   SENDING: ["info", "Sending"],

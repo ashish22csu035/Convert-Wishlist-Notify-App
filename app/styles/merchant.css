@@ -1,35 +1,44 @@
 /* Konvert merchant screens: a small light design system. Polaris web components provide the controls
    (selects, buttons, badges, tables, banners); everything here is layout, cards, charts and accents.
 
-   Every colour comes from the tokens on .kv, so a page never hard-codes one:
-     surfaces  --kv-bg (page panel) and --kv-surface / --kv-surface-2 (cards, inputs, dropdowns: white)
+   Every colour comes from the tokens on .kv, so a page never hard-codes one. The theme is black and white:
+     surfaces  --kv-bg (page panel, light grey) and --kv-surface / --kv-surface-2 (cards, inputs, dropdowns: white)
      lines     --kv-border (cards, inputs), --kv-border-soft (dividers), --kv-hover (hover and table headers)
-     text      --kv-text (charcoal), --kv-subdued (medium grey, 4.5:1 or better on every surface)
-     meaning   violet = Wishlist, blue = Notify Me, green = revenue, amber = warning, red = error
-     series    cyan and pink are only for the second and third series of a chart or funnel
+     text      --kv-text (near black), --kv-subdued (medium grey, 4.5:1 or better on every surface)
+     accent    --kv-primary (black) for actions and the selected tab / segment; --kv-primary-hover (#222)
+     meaning   green = a finished step (success), amber = warning, red = error. Nothing else is coloured.
+     series    charts and the funnel use greys: --kv-cyan and --kv-pink for the 2nd and 3rd series, --kv-tone-1..4 for the
+               funnel stages (strongest to lightest). violet / blue are legacy names that now alias the primary.
+   The merchant's own storefront colours (icon, hover, saved, Notify Me button) are settings, not part of this theme.
    The theme applies to the app content (.kv) only; the Shopify Admin around it is not touched. */
 
 .kv {
-  --kv-bg: #f7f8fa;
+  --kv-bg: #f7f7f7;
   --kv-surface: #ffffff;
   --kv-surface-2: #ffffff;
   --kv-border: #e5e7eb;
-  --kv-border-soft: #f0f1f4;
+  --kv-border-soft: #f0f0f0;
   --kv-hover: #f3f4f6;
-  --kv-text: #202124;
-  --kv-subdued: #666d7b;
+  --kv-text: #171717;
+  --kv-subdued: #5f6672;
   --kv-disabled: #9ca3af;
   --kv-radius: 12px;
   --kv-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
   --kv-on-accent: #ffffff;
 
-  --kv-violet: #7c3aed;
-  --kv-blue: #2563eb;
-  --kv-green: #15803d;
+  --kv-primary: #000000;
+  --kv-primary-hover: #222222;
+  --kv-violet: #000000; /* legacy names kept as aliases of the one primary accent */
+  --kv-blue: #000000;
+  --kv-green: #15803d; /* success only: a finished setup step */
   --kv-amber: #cc6a05;
   --kv-rose: #dc2626;
-  --kv-cyan: #0e7490;
-  --kv-pink: #be185d;
+  --kv-cyan: #666666; /* chart series 2: deep grey */
+  --kv-pink: #8a8a8a; /* chart series 3: mid grey (3:1 on white, enough for lines and dots) */
+  --kv-tone-1: #000000; /* funnel stages, first to last */
+  --kv-tone-2: #404040;
+  --kv-tone-3: #737373;
+  --kv-tone-4: #b3b3b3;
 
   color: var(--kv-text);
   color-scheme: light; /* native controls (date picker, scrollbars) and Polaris components stay light, whatever the browser prefers */
@@ -43,6 +52,25 @@
 
 .kv * {
   box-sizing: border-box;
+}
+
+/* ---------- Page-change loading (app/routes/app.jsx) ---------- */
+/* The spinner is centred in the app frame (fixed, so it takes no room in the page). Both the fade-out of the leaving page
+   and the spinner wait 120ms, so a fast navigation shows neither and nothing flickers. */
+html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opacity 0.15s ease 0.12s; }
+.kv-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  animation: kv-loading-in 0.15s ease 0.12s both;
+}
+@keyframes kv-loading-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  html[data-kv-loading] s-page { transition: none; }
+  .kv-loading { animation: none; }
 }
 
 /* ---------- Page header ---------- */
@@ -104,7 +132,7 @@
 .kv-link {
   font-size: 13px;
   font-weight: 550;
-  color: var(--kv-blue);
+  color: var(--kv-primary);
   text-decoration: none;
 }
 .kv-link:hover {
@@ -135,8 +163,8 @@
 /* ---------- KPI cards ---------- */
 .kv-kpi {
   --accent: var(--kv-violet);
-  --tint: #f3eeff;
-  --edge: #ddd0fb;
+  --tint: #f3f4f6;
+  --edge: #e5e7eb;
   background: var(--kv-surface);
   border: 1px solid var(--kv-border);
   box-shadow: var(--kv-shadow);
@@ -147,9 +175,9 @@
   gap: 4px;
   min-width: 0;
 }
-.kv-kpi.violet { --accent: var(--kv-violet); --tint: #f3eeff; --edge: #ddd0fb; }
-.kv-kpi.blue { --accent: var(--kv-blue); --tint: #eaf1ff; --edge: #c7d9fb; }
-.kv-kpi.green { --accent: var(--kv-green); --tint: #e8f5ec; --edge: #bfe3cb; }
+.kv-kpi.violet { --accent: var(--kv-violet); --tint: #f3f4f6; --edge: #e5e7eb; }
+.kv-kpi.blue { --accent: var(--kv-blue); --tint: #f3f4f6; --edge: #e5e7eb; }
+.kv-kpi.green { --accent: var(--kv-primary); --tint: #f3f4f6; --edge: #e5e7eb; } /* revenue: neutral like the rest */
 .kv-kpi.amber { --accent: var(--kv-amber); --tint: #fef3e2; --edge: #f6d9a8; }
 .kv-kpi.rose { --accent: var(--kv-rose); --tint: #fdecec; --edge: #f6c5c5; }
 .kv-kpi.muted { --accent: var(--kv-subdued); --tint: var(--kv-hover); --edge: var(--kv-border); }
@@ -224,17 +252,6 @@
   font-size: 12px;
   color: var(--kv-subdued);
 }
-.kv-delta {
-  font-size: 12px;
-  font-weight: 650;
-  border-radius: 999px;
-  padding: 2px 8px;
-  background: var(--kv-surface);
-  border: 1px solid var(--kv-border);
-}
-.kv-delta.up { color: var(--kv-green); }
-.kv-delta.down { color: var(--kv-rose); }
-.kv-delta.flat { color: var(--kv-subdued); }
 
 /* ---------- Charts ---------- */
 .kv-legend {
@@ -268,6 +285,33 @@
   stroke: var(--kv-border);
   stroke-width: 1;
 }
+/* Chart hover: the guide line and dots follow the day under the pointer, the tooltip sits inside the plot. */
+.kv-chart-wrap { position: relative; outline-offset: 2px; border-radius: 8px; }
+.kv-chart-wrap:focus-visible { outline: 2px solid var(--kv-primary); }
+.kv-chart .guide { stroke: var(--kv-subdued); stroke-width: 1; stroke-dasharray: 3 3; }
+.kv-chart .hit { cursor: crosshair; }
+.kv-tooltip {
+  position: absolute;
+  top: 14px;
+  z-index: 5;
+  min-width: 170px;
+  max-width: 260px;
+  margin-inline-start: 12px;
+  padding: 10px 12px;
+  background: var(--kv-surface);
+  color: var(--kv-text);
+  border: 1px solid var(--kv-border);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(16, 24, 40, 0.12);
+  font-size: 13px;
+  pointer-events: none;
+}
+.kv-tooltip.left { transform: translateX(calc(-100% - 24px)); }
+.kv-tooltip-date { font-weight: 650; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--kv-border-soft); }
+.kv-tooltip ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.kv-tooltip li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.kv-tooltip li::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--kv-primary)); order: -1; margin-inline-end: -4px; }
+.kv-tooltip-name { flex: 1; color: var(--kv-subdued); }
 .kv-chart-empty {
   min-height: 160px;
 }
@@ -341,9 +385,9 @@
   background: var(--kv-hover);
 }
 .kv-tab[aria-current="page"] {
-  background: var(--kv-surface);
-  border-color: var(--kv-blue);
-  color: var(--kv-blue);
+  background: var(--kv-primary);
+  border-color: var(--kv-primary);
+  color: var(--kv-on-accent);
 }
 .kv-toolbar {
   display: flex;
@@ -352,6 +396,11 @@
   gap: 8px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--kv-border-soft);
+}
+/* A toolbar with a single control (the Engaged customers sort): it sits at the right edge, level with the table below. */
+.kv-toolbar--end {
+  align-items: center;
+  justify-content: flex-end;
 }
 .kv-toolbar .grow {
   flex: 1 1 220px;
@@ -413,11 +462,11 @@
   border-radius: 999px;
   display: grid;
   place-items: center;
-  background: #f3eeff;
-  color: var(--kv-violet);
+  background: #f3f4f6;
+  color: var(--kv-primary);
 }
-.kv-feed-icon.blue { background: #eaf1ff; color: var(--kv-blue); }
-.kv-feed-icon.green { background: #e8f5ec; color: var(--kv-green); }
+.kv-feed-icon.blue { background: #f3f4f6; color: var(--kv-blue); }
+.kv-feed-icon.green { background: #f3f4f6; color: var(--kv-primary); }
 .kv-feed-icon.neutral { background: var(--kv-hover); color: var(--kv-subdued); }
 .kv-feed-text {
   font-size: 13px;
@@ -517,13 +566,13 @@
   border-radius: 999px;
 }
 .kv-hint:focus-visible {
-  outline: 2px solid var(--kv-blue);
+  outline: 2px solid var(--kv-primary);
   outline-offset: 2px;
 }
 .kv-link:focus-visible,
 .kv-tab:focus-visible,
 .kv-pager a:focus-visible {
-  outline: 2px solid var(--kv-blue);
+  outline: 2px solid var(--kv-primary);
   outline-offset: 2px;
   border-radius: 6px;
 }
@@ -605,36 +654,6 @@
 }
 
 /* ---------- Custom date range ---------- */
-.kv-range-custom {
-  flex-basis: 100%;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: flex-end;
-  gap: 8px 12px;
-}
-.kv-range-custom label {
-  display: grid;
-  gap: 2px;
-  font-size: 12px;
-  color: var(--kv-subdued);
-}
-.kv-range-custom input[type="date"] {
-  font: inherit;
-  font-size: 14px;
-  color: var(--kv-text);
-  padding: 6px 8px;
-  border: 1px solid var(--kv-border);
-  border-radius: 8px;
-  background: var(--kv-surface-2);
-}
-.kv-range-custom input:focus-visible {
-  outline: 2px solid var(--kv-blue);
-  outline-offset: 1px;
-}
-.kv-range-custom input[aria-invalid="true"] {
-  border-color: var(--kv-rose);
-}
 .kv-range-apply {
   appearance: none;
   font: inherit;
@@ -643,12 +662,13 @@
   padding: 7px 14px;
   border-radius: 8px;
   border: 1px solid var(--kv-blue);
-  background: var(--kv-blue);
+  background: var(--kv-primary);
   color: var(--kv-on-accent);
   cursor: pointer;
 }
 .kv-range-apply:hover {
-  filter: brightness(1.08);
+  background: var(--kv-primary-hover);
+  border-color: var(--kv-primary-hover);
 }
 .kv-range-apply:focus-visible {
   outline: 2px solid var(--kv-text);
@@ -661,6 +681,11 @@
   font-size: 13px;
   color: var(--kv-rose);
 }
+.kv-refresh-meta {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--kv-subdued);
+}
 .kv-range-note {
   flex-basis: 100%;
   margin: 0;
@@ -668,6 +693,49 @@
   font-size: 12px;
   color: var(--kv-subdued);
 }
+
+/* ---------- Range calendar (Analytics custom range): one month, accent for the ends, a light tint between ---------- */
+/* The popover root is portalled to <body>, so it carries the .kv tokens itself but none of the page-panel look. */
+.kv.kv-pop-root { position: fixed; z-index: 1000; padding: 0; margin: 0; background: transparent; border-radius: 0; display: block; gap: 0; width: 0; height: 0; overflow: visible; }
+.kv-cal {
+  position: fixed;
+  z-index: 1000;
+  width: min(320px, calc(100vw - 16px));
+  padding: 14px;
+  background: var(--kv-surface);
+  border: 1px solid var(--kv-border);
+  border-radius: var(--kv-radius);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.14), 0 1px 2px rgba(16, 24, 40, 0.06);
+  display: grid;
+  gap: 10px;
+}
+.kv-cal-summary { margin: 0; font-size: 13px; font-weight: 600; text-align: center; }
+.kv-cal-head { display: flex; align-items: center; justify-content: space-between; }
+.kv-cal-nav {
+  appearance: none; font: inherit; font-size: 18px; line-height: 1; width: 32px; height: 32px;
+  border: 1px solid var(--kv-border); border-radius: 8px; background: var(--kv-surface); color: var(--kv-text); cursor: pointer;
+}
+.kv-cal-nav:hover { background: var(--kv-hover); }
+.kv-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
+.kv-cal-weekday { text-align: center; font-size: 12px; color: var(--kv-subdued); padding: 4px 0; }
+.kv-cal-day {
+  appearance: none; font: inherit; font-size: 13px; height: 34px; border: 0; background: transparent; color: var(--kv-text);
+  border-radius: 0; cursor: pointer;
+}
+.kv-cal-day:hover:not(:disabled):not(.edge) { background: var(--kv-hover); border-radius: 8px; }
+.kv-cal-day.muted { color: var(--kv-disabled); }
+.kv-cal-day.today { font-weight: 700; text-decoration: underline; }
+.kv-cal-day.inside { background: #ededed; }
+.kv-cal-day.edge { background: var(--kv-primary); color: var(--kv-on-accent); border-radius: 8px; font-weight: 650; }
+.kv-cal-day:disabled { color: var(--kv-disabled); cursor: not-allowed; opacity: 0.5; }
+.kv-cal-day:focus-visible, .kv-cal-nav:focus-visible, .kv-cal-cancel:focus-visible { outline: 2px solid var(--kv-primary); outline-offset: 1px; }
+.kv-cal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.kv-cal-cancel {
+  appearance: none; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px;
+  border: 1px solid var(--kv-border); background: var(--kv-surface); color: var(--kv-text); cursor: pointer;
+}
+.kv-cal-cancel:hover { background: var(--kv-hover); }
+.kv-range-apply:disabled { background: var(--kv-hover); border-color: var(--kv-border); color: var(--kv-disabled); cursor: not-allowed; }
 
 /* ---------- (i) popover ---------- */
 .kv-info {
@@ -752,18 +820,16 @@
 .kv-funnel-shape > div {
   width: 100%;
   height: var(--h);
-  background: var(--kv-violet);
-  opacity: 0.85;
+  background: var(--kv-primary);
+  opacity: 0.9;
   clip-path: polygon(0 0, 100% 12%, 100% 88%, 0 100%);
   border-radius: 6px;
 }
-/* the first stage carries the feature colour; the later stages keep one role colour in both funnels */
-.kv-funnel[data-feature="notifyMe"] .kv-funnel-stage.s1 .kv-funnel-shape > div { background: var(--kv-blue); }
-.kv-funnel-stage.s1 .kv-funnel-shape > div { --h: 100%; background: var(--kv-violet); }
-.kv-funnel-stage.s2 .kv-funnel-shape > div { --h: 80%; background: var(--kv-cyan); }
-.kv-funnel-stage.s3 .kv-funnel-shape > div { --h: 62%; background: var(--kv-pink); }
-.kv-funnel-stage.s4 .kv-funnel-shape > div { --h: 46%; background: var(--kv-green); }
-.kv-funnel[data-feature="notifyMe"] .kv-funnel-stage.s1 .kv-funnel-shape > div { background: var(--kv-blue); }
+/* one grey family in both funnels: stages differ by tone (strongest to lightest), and the labels name them */
+.kv-funnel-stage.s1 .kv-funnel-shape > div { --h: 100%; background: var(--kv-tone-1); }
+.kv-funnel-stage.s2 .kv-funnel-shape > div { --h: 80%; background: var(--kv-tone-2); }
+.kv-funnel-stage.s3 .kv-funnel-shape > div { --h: 62%; background: var(--kv-tone-3); }
+.kv-funnel-stage.s4 .kv-funnel-shape > div { --h: 46%; background: var(--kv-tone-4); }
 .kv-funnel-stage.na .kv-funnel-shape > div {
   background: repeating-linear-gradient(135deg, #e5e7eb 0 6px, #f3f4f6 6px 12px);
   opacity: 1;
@@ -832,7 +898,7 @@
   color-scheme: light;
 }
 .kv :focus-visible {
-  outline-color: var(--kv-blue);
+  outline-color: var(--kv-primary);
 }
 .kv-kpi-value.na,
 .kv-funnel-count.na {
@@ -853,18 +919,10 @@
     flex: 1 1 100%;
     min-width: 0;
   }
-  .kv-range-custom {
-    justify-content: flex-start;
-  }
-  .kv-range-custom label {
-    flex: 1 1 130px;
-    min-width: 0;
-  }
-  .kv-range-custom input[type="date"] {
-    width: 100%;
-    min-width: 0;
-  }
-  .kv-range-apply {
+  .kv-range-apply,
+  .kv-cal-cancel,
+  .kv-cal-day,
+  .kv-cal-nav {
     min-height: 40px;
   }
   .kv-range-error,
@@ -986,15 +1044,13 @@ button.kv-tab {
   flex-direction: column;
   gap: 16px;
 }
-.kv-color,
-.kv-url {
+.kv-color {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
 }
-.kv-color > :first-child,
-.kv-url > :first-child {
+.kv-color > :first-child {
   flex: 1 1 220px;
 }
 .kv-preview-card {
@@ -1057,3 +1113,197 @@ button.kv-tab {
     position: static;
   }
 }
+
+/* Dashboard setup checklist (app/components/setup-checklist.jsx) */
+.kv-setup {
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.kv-setup-hidden {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+}
+.kv-setup-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.kv-setup-head h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 650;
+}
+.kv-setup-head p,
+.kv-setup-body p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--kv-subdued);
+}
+.kv-setup-controls {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.kv-setup-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.kv-setup-icon:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+.kv-setup-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 4px;
+  font-size: 13px;
+}
+.kv-setup-count {
+  white-space: nowrap;
+}
+.kv-setup-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+.kv-setup-bar span {
+  display: block;
+  height: 100%;
+  background: var(--kv-primary);
+}
+.kv-setup-steps {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.kv-setup-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 0;
+  border-top: 1px solid var(--kv-border);
+}
+.kv-setup-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border: 2px dashed var(--kv-pink);
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.kv-setup-step.done .kv-setup-mark {
+  border: 0;
+  background: var(--kv-green);
+  color: #fff;
+}
+.kv-setup-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.kv-setup-status {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: #fff1d6;
+  color: var(--kv-text);
+}
+.kv-setup-status.done {
+  background: #cdfee1;
+  color: var(--kv-text);
+}
+.kv-setup-body .kv-setup-help {
+  font-size: 12px;
+}
+.kv-setup-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.kv-setup-finish {
+  margin: 8px 0 0;
+}
+@media (max-width: 640px) {
+  .kv-setup-step {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+  .kv-setup-actions {
+    grid-column: 2;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+}
+
+/* Notify Me Settings previews (app/components/notify-settings-form.jsx) */
+.kv-preview-body {
+  padding: 8px 16px 16px;
+}
+.kv-email-frame {
+  width: 100%;
+  height: 420px;
+  border: 1px solid var(--kv-border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+/* Notify Me Settings preview pages (app/components/notify-preview.jsx): a sample "theme" laid out at 960px / 390px. */
+.kv-np-canvas { background: #fff; color: #1c1c1c; font: 15px/1.4 Georgia, serif; transform-origin: 0 0; overflow: hidden; }
+.kv-np-header { display: flex; justify-content: space-between; padding: 12px 24px; border-bottom: 1px solid #e6e6e6; }
+.kv-np-pad { padding: 16px 24px 0; }
+.kv-np-title { margin: 0 0 4px; font-size: 26px; font-weight: 400; }
+.kv-np-price, .kv-np-hint { margin: 2px 0; color: #666; font-size: 14px; }
+.kv-np-label { margin: 14px 0 6px; font-size: 13px; color: #555; }
+.kv-np-product-body { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; padding: 24px; }
+.kv-np-canvas[data-viewport="mobile"] .kv-np-product-body { grid-template-columns: 1fr; gap: 16px; padding: 16px; }
+.kv-np-canvas[data-viewport="mobile"] .kv-np-header,
+.kv-np-canvas[data-viewport="mobile"] .kv-np-pad { padding-inline: 14px; }
+.kv-np-img { aspect-ratio: 4 / 5; overflow: hidden; background: #f4f4f4; }
+.kv-np-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.kv-np-img--lg { aspect-ratio: 1 / 1; }
+/* The mobile canvas is 390 x 600: a full-width square photo (about 360px tall) pushed the Notify Me button below the clipped bottom edge. */
+/* Mobile frame is 390 x 600. The photo fills the full width (cover: no side bars, no distortion) in a 4:3 box, which keeps the
+   Notify Me button inside the frame (measured: it ends at about 571px of 600). */
+.kv-np-canvas[data-viewport="mobile"] .kv-np-img--lg { aspect-ratio: 4 / 3; }
+.kv-np-img--sm { width: 64px; flex: none; aspect-ratio: 1 / 1; }
+.kv-np-sizes { display: flex; gap: 8px; }
+.kv-np-size { min-width: 44px; padding: 8px 12px; text-align: center; border: 1px solid #cfcfcf; border-radius: 22px; font-size: 14px; }
+.kv-np-size.on { color: #fff; background: #1c1c1c; border-color: #1c1c1c; }
+.kv-np-size--out { text-decoration: line-through; }
+.kv-np-notify { display: block; width: 100%; margin-top: 16px; padding: 14px 16px; font: inherit; font-weight: 600; border-radius: 4px; cursor: pointer; }
+.kv-np-notify[disabled] { cursor: default; opacity: 0.7; }
+.kv-np-notify--row { width: auto; margin: 0; padding: 10px 14px; font-size: 14px; }
+.kv-np-card-title { margin: 8px 0 0; font-size: 15px; }
+.kv-np-rows { list-style: none; margin: 0; padding: 16px 24px; }
+.kv-np-canvas[data-viewport="mobile"] .kv-np-rows { padding-inline: 14px; }
+.kv-np-row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid #eee; }
+.kv-np-row-info { flex: 1; min-width: 0; }
+.kv-np-cart { padding: 10px 14px; font-size: 14px; border: 1px solid #1c1c1c; border-radius: 4px; }
+.kv-np-email { max-width: 100%; margin: 0 auto; }
+.kv-np-email--mobile { max-width: 390px; }
+.kv-np-email--mobile .kv-email-frame { height: 520px; }

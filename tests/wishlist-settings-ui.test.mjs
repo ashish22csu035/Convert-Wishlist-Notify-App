@@ -10,6 +10,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { barDiscard, barSave, barShowing, canDiscard, canSave, installSaveBar, saveBars } from "./helpers/save-bar.mjs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
@@ -36,6 +37,7 @@ const h = (...args) => React.createElement(...args);
 
 before(async () => {
   dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: "http://localhost/" });
+  installSaveBar(dom.window);
   for (const name of ["window", "document", "HTMLElement", "Node", "Event", "MouseEvent", "KeyboardEvent"]) {
     Object.defineProperty(globalThis, name, { value: name === "window" ? dom.window : dom.window[name], configurable: true, writable: true });
   }
@@ -107,8 +109,8 @@ const type = (el, value) => act(() => { el.value = value; fire(el, "input"); });
 const flip = (el, on) => act(() => { el.checked = on; fire(el, "change"); });
 const tab = (name) => byText('button[role="tab"]', name);
 const goTab = (name) => click(tab(name));
-const saveButton = () => byText("s-button", "Save") ?? byText("s-button", "Saving…");
-const discardButton = () => byText("s-button", "Discard");
+const saveButton = () => barSave(document);
+const discardButton = () => barDiscard(document);
 const selectedTab = () => [...container.querySelectorAll('button[role="tab"]')].filter((b) => b.getAttribute("aria-selected") === "true").map((b) => b.textContent);
 
 // The stub route's action does what the real one does with the posted text: the shared validator, then the merge.
@@ -155,7 +157,7 @@ test("four tabs share one screen; General is first; each tab shows its own contr
   assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch")].map((e) => e.getAttribute("label")), ["Show hearts on product cards", "Icon size (px)", "Background opacity (%)", "Position on the product image", "Wishlist count"]);
 
   await goTab("Wishlist page");
-  assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch, s-text-field")].map((e) => e.getAttribute("label")), ["Layout", "Show the Wishlist icon in the header", "Wishlist page address"]);
+  assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch, s-text-field")].map((e) => e.getAttribute("label")), ["Layout", "Show the Wishlist icon in the header"]);
   assert.equal(container.querySelector('[role="tabpanel"]'), container.querySelector("#kv-tabpanel"));
   await unmount();
 });
@@ -201,7 +203,7 @@ test("edits survive switching tabs, Save sends everything once, and success is s
   const { element, calls } = formApp({ action: async (text) => { await sleep(60); return null; } });
   await mount(element);
   await act(() => sleep(10));
-  assert.equal(saveButton().hasAttribute("disabled"), true, "nothing to save yet");
+  assert.equal(canSave(), false, "nothing to save yet");
 
   await choose("Icon", "star");
   await goTab("Product page");
@@ -222,12 +224,12 @@ test("edits survive switching tabs, Save sends everything once, and success is s
   assert.equal(field("s-number-field", "Icon size (px)").getAttribute("value"), "30");
   await goTab("Wishlist page");
   assert.equal(select("Layout").getAttribute("value"), "grid");
-  assert.match(container.textContent, /Unsaved changes/);
+  assert.equal(barShowing(), true, "the native Save bar is showing");
   assert.equal(calls.length, 0, "editing and previewing sends nothing");
 
   await click(saveButton());
   assert.equal(hasBanner("Appearance saved"), false, "not announced before the server confirms");
-  assert.equal(saveButton().textContent, "Saving…");
+  assert.equal(saveButton().hasAttribute("loading"), true, "the native Save shows its spinner while the request runs");
   await click(saveButton()); // a second click while saving
   await act(() => sleep(150));
   assert.equal(calls.length, 1, "no duplicate submission");
@@ -241,8 +243,32 @@ test("edits survive switching tabs, Save sends everything once, and success is s
   assert.deepEqual(Object.keys(sent).sort(), ["collectionPage", "general", "productPage", "wishlistPage"], "all four tabs travel together");
   assert.equal(Object.keys(sent).some((k) => /wishlistEnabled|notifyMeEnabled|shop/i.test(k)), false, "no switch and no shop is ever sent");
   assert.equal(hasBanner("Appearance saved"), true);
-  assert.equal(saveButton().hasAttribute("disabled"), true, "saved: nothing left to save");
-  assert.equal(container.textContent.includes("Unsaved changes"), false);
+  assert.equal(canSave(), false, "saved: nothing left to save");
+  assert.equal(barShowing(), false, "the native Save bar is hidden");
+  await unmount();
+});
+
+test("native Save bar: one Shopify bar for the whole screen, shown across all four tabs; the page has no Save buttons of its own", async () => {
+  const { element, calls } = formApp();
+  await mount(element);
+  await act(() => sleep(10));
+  assert.equal(saveBars().length, 1, "exactly one bar");
+  assert.equal(saveBars()[0].id, "wishlist-settings-save-bar");
+  assert.equal(barShowing(), false, "no change, no bar");
+  for (const label of ["Save", "Discard", "Saving…"]) assert.equal(byText("s-button", label), undefined, `no page-level ${label} button`);
+  for (const [name, change] of [["General", () => choose("Icon", "star")], ["Product page", () => choose("Button style", "filled")], ["Collection page", () => choose("Wishlist count", "none")], ["Wishlist page", () => choose("Layout", "grid")]]) {
+    await goTab(name);
+    await change();
+    assert.equal(barShowing(), true, `an edit on ${name} shows the bar`);
+    await click(discardButton());
+    assert.equal(barShowing(), false, `Discard on ${name} hides it`);
+    assert.equal(calls.length, 0, "Discard sends no request");
+  }
+  await goTab("General");
+  await choose("Icon", "star");
+  await goTab("Wishlist page");
+  assert.equal(barShowing(), true, "switching tabs keeps the bar");
+  assert.equal(saveBars().length, 1, "never a second bar");
   await unmount();
 });
 
@@ -251,22 +277,22 @@ test("Discard goes back to the last server-confirmed settings on every tab, and 
   const { element, calls } = formApp({ appearance: start });
   await mount(element);
   await act(() => sleep(10));
-  assert.equal(discardButton().hasAttribute("disabled"), true, "nothing to discard yet");
+  assert.equal(canDiscard(), false, "nothing to discard yet");
 
   await choose("Icon", "heart");
   await goTab("Collection page");
   await type(field("s-number-field", "Icon size (px)"), "40");
   await goTab("Wishlist page");
   await choose("Layout", "grid");
-  assert.equal(discardButton().hasAttribute("disabled"), false);
+  assert.equal(canDiscard(), true);
   await click(discardButton());
   assert.equal(select("Layout").getAttribute("value"), "table");
   await goTab("Collection page");
   assert.equal(field("s-number-field", "Icon size (px)").getAttribute("value"), "26");
   await goTab("General");
   assert.equal(select("Icon").getAttribute("value"), "bookmark");
-  assert.equal(saveButton().hasAttribute("disabled"), true);
-  assert.equal(container.textContent.includes("Unsaved changes"), false);
+  assert.equal(canSave(), false);
+  assert.equal(barShowing(), false, "the native Save bar is hidden");
 
   // after a save, Discard returns to THAT save, not to the page as first loaded
   await choose("Icon", "star");
@@ -294,7 +320,7 @@ test("a failed save keeps every edit, says so, can be retried, and Discard clear
   assert.match(failure.text, /try Save again/);
   assert.equal(hasBanner("Appearance saved"), false);
   assert.equal(select("Layout").getAttribute("value"), "grid", "the edit is still there");
-  assert.equal(saveButton().hasAttribute("disabled"), false);
+  assert.equal(canSave(), true);
 
   await click(saveButton());
   await act(() => sleep(40));
@@ -337,24 +363,24 @@ test("a value the server would refuse is flagged on the field and cannot be save
   const size = () => field("s-number-field", "Icon size (px)");
   await type(size(), "5");
   assert.match(size().getAttribute("error"), /whole number from 14 to 40/);
-  assert.equal(saveButton().hasAttribute("disabled"), true, "Save is off while a field is invalid");
+  assert.equal(canSave(), false, "Save is off while a field is invalid");
   await click(saveButton());
   assert.equal(calls.length, 0, "nothing is sent");
-  assert.match(container.textContent, /Unsaved changes/, "and leaving would still warn");
+  assert.equal(barShowing(), true, "and leaving would still warn");
   await type(size(), "abc");
   assert.ok(size().getAttribute("error"));
   await type(size(), "");
   assert.ok(size().getAttribute("error"), "icon size cannot be empty");
   await type(size(), "40");
   assert.equal(size().getAttribute("error"), null);
-  assert.equal(saveButton().hasAttribute("disabled"), false);
+  assert.equal(canSave(), true);
 
   await type(field("s-number-field", "Background opacity (%)"), "101");
   assert.ok(field("s-number-field", "Background opacity (%)").getAttribute("error"));
   await goTab("General");
   await type(field("s-color-field", "Default icon color"), "red");
   assert.match(field("s-color-field", "Default icon color").getAttribute("error"), /hex color/);
-  assert.equal(saveButton().hasAttribute("disabled"), true, "an error on another tab still blocks Save");
+  assert.equal(canSave(), false, "an error on another tab still blocks Save");
   await unmount();
 });
 
@@ -372,7 +398,7 @@ test("colours: unset means 'use the theme editor colour'; choosing one sends it;
   await act(() => sleep(40));
   assert.equal(posted(calls).general.defaultColor, "#AA00FF", "the server normalizes it; the screen sends what was typed");
   await click(byText("s-button", "Use default"));
-  assert.equal(saveButton().hasAttribute("disabled"), false, "clearing the colour is a change");
+  assert.equal(canSave(), true, "clearing the colour is a change");
   await click(saveButton());
   await act(() => sleep(40));
   assert.equal(posted(calls, 1).general.defaultColor, null);
@@ -414,7 +440,7 @@ test("Reset to defaults resets only the tab you are on, and still needs Save", a
   await click(byText("s-button", "Reset to defaults"));
   assert.equal(field("s-number-field", "Icon size (px)").getAttribute("value"), "22");
   assert.equal(select("Position on the product image").getAttribute("value"), "top-right");
-  assert.equal(saveButton().hasAttribute("disabled"), false);
+  assert.equal(canSave(), true);
   await goTab("General");
   assert.equal(select("Icon").getAttribute("value"), "star", "other tabs keep their settings");
   assert.equal(field("s-color-field", "Default icon color").getAttribute("value"), "#112233");
@@ -602,6 +628,97 @@ test("the preview and the storefront stylesheet really connect: hidden things ar
   await unmount();
 });
 
+const hearts = () => pqa("[data-kw-button]");
+const pressed = (n) => hearts()[n].getAttribute("aria-pressed");
+const clickHeart = (n) => act(() => hearts()[n].dispatchEvent(new (pdoc().defaultView.MouseEvent)("click", { bubbles: true, cancelable: true })));
+
+test("preview hearts: a click fills an empty heart (the saved look), a second click empties it, and nothing is sent or saved", async () => {
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (...args) => { calls.push(args); return Promise.reject(new Error("no request expected")); };
+  try {
+    const { element, calls: saves } = formApp({ appearance: resolveAppearance({ general: { activeColor: "#112233" } }) });
+    await mount(element);
+    await act(() => sleep(10));
+    await goTab("Collection page");
+    assert.ok(hearts().length >= 6, "the sample grid has hearts");
+    const empty = hearts().findIndex((h) => h.getAttribute("aria-pressed") === "false");
+    assert.notEqual(empty, -1);
+    const before = pressed(empty);
+    await clickHeart(empty);
+    assert.equal(pressed(empty), "true", "filled at once");
+    assert.match(hearts()[empty].getAttribute("aria-label"), /^Saved to wishlist/);
+    assert.equal(pvar("--kw-general-active-color"), "#112233", "the merchant's saved colour is what the filled state uses");
+    const css = fs.readFileSync("extensions/konvert-wishlist/assets/konvert-wishlist.css", "utf8");
+    assert.match(css, /\.kw-btn\[aria-pressed='true'\] > \.kw-heart/, "and the storefront stylesheet draws aria-pressed=true in that colour");
+    await clickHeart(empty);
+    assert.equal(pressed(empty), before, "emptied again");
+    assert.match(hearts()[empty].getAttribute("aria-label"), /^Add to wishlist/);
+    await clickHeart(empty);
+    assert.equal(pressed(empty), "true");
+    // a heart that starts filled (the sample's Saved example) can be emptied too
+    const filled = hearts().findIndex((h, i) => i !== empty && h.getAttribute("aria-pressed") === "true");
+    if (filled !== -1) {
+      await clickHeart(filled);
+      assert.equal(pressed(filled), "false");
+    }
+    assert.equal(calls.length, 0, "no request of any kind");
+    assert.equal(saves.length, 0, "nothing was saved");
+    assert.equal(canSave(), false, "a preview click is not a settings change");
+    assert.equal(barShowing(), false);
+    // editing a setting redraws the frame but keeps the merchant's clicks
+    await choose("Position on the product image", "top-left");
+    assert.equal(pressed(empty), "true");
+    await goTab("General");
+    await goTab("Collection page");
+    assert.equal(pressed(empty), "true", "and so do tab switches");
+    await unmount();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("preview hearts: Desktop and Mobile keep their own clicks, on the product page button too", async () => {
+  const { element } = formApp();
+  await mount(element);
+  await act(() => sleep(10));
+  await goTab("Collection page"); // starts as the mobile grid
+  assert.equal(byText(".kv-seg-btn", "Mobile").getAttribute("aria-pressed"), "true");
+  const empty = hearts().findIndex((h) => h.getAttribute("aria-pressed") === "false");
+  await clickHeart(empty);
+  assert.equal(pressed(empty), "true", "mobile preview");
+  await click(viewportButton("Desktop"));
+  assert.equal(pressed(empty), "false", "the desktop preview is untouched by the mobile click");
+  await clickHeart(empty);
+  assert.equal(pressed(empty), "true", "desktop preview");
+  await click(viewportButton("Mobile"));
+  assert.equal(pressed(empty), "true", "mobile still remembers its own");
+  await clickHeart(empty);
+  assert.equal(pressed(empty), "false", "emptied on mobile only");
+  await click(viewportButton("Desktop"));
+  assert.equal(pressed(empty), "true", "desktop keeps its heart");
+
+  await goTab("Product page");
+  const button = pq(".kw-btn--product");
+  assert.equal(button.getAttribute("aria-pressed"), "false");
+  assert.equal(button.querySelector("[data-kw-label]").textContent, "Add to wishlist");
+  await act(() => button.dispatchEvent(new (pdoc().defaultView.MouseEvent)("click", { bubbles: true, cancelable: true })));
+  assert.equal(pq(".kw-btn--product").getAttribute("aria-pressed"), "true");
+  assert.equal(pq(".kw-btn--product [data-kw-label]").textContent, "Saved to wishlist");
+  await unmount();
+});
+
+test("preview links never navigate: a click on the sample header Wishlist link is stopped", async () => {
+  const { element } = formApp();
+  await mount(element);
+  await act(() => sleep(10));
+  const link = pq(".kw-header-icon");
+  const event = new (pdoc().defaultView.MouseEvent)("click", { bubbles: true, cancelable: true });
+  await act(() => link.dispatchEvent(event));
+  assert.equal(event.defaultPrevented, true);
+  await unmount();
+});
+
 test("Desktop and Mobile switch the frame width without touching the page around it or the settings", async () => {
   const { element, calls } = formApp();
   await mount(element);
@@ -619,8 +736,8 @@ test("Desktop and Mobile switch the frame width without touching the page around
   assert.ok(container.querySelector(".kv-pv-device--mobile"));
   assert.equal(container.querySelector(".kv-pv-stage").getAttribute("style"), stageBefore, "the stage (and so the page layout) keeps its size");
   assert.equal(controlsCard.getAttribute("style"), null, "the controls are not resized");
-  assert.equal(saveButton().hasAttribute("disabled"), true, "a view choice is not a change to save");
-  assert.equal(container.textContent.includes("Unsaved changes"), false);
+  assert.equal(canSave(), false, "a view choice is not a change to save");
+  assert.equal(barShowing(), false, "the native Save bar is hidden");
   assert.equal(pq(".pv-page").getAttribute("data-preview"), "general", "same page, new width");
 
   await goTab("Collection page");
@@ -753,7 +870,8 @@ test("the preview is sealed: no script, no request, no link out, nothing saved",
     for (const name of ["General", "Product page", "Collection page", "Wishlist page"]) {
       await goTab(name);
       assert.equal(pqa("script, form, iframe, link, object, embed").length, 0, `${name}: nothing executable or loadable`);
-      assert.equal(pqa("[src], [srcset]").length, 0, `${name}: no external resource`);
+      assert.equal(pqa("[srcset]").length, 0, `${name}: no responsive sources`);
+      assert.equal(pqa("[src]").filter((e) => e.tagName !== "IMG" || !/^\/preview-products\/[a-z]+\.jpg$/.test(e.getAttribute("src"))).length, 0, `${name}: the only resources are the bundled sample photos`);
       assert.equal(pqa("a[href]").filter((a) => a.getAttribute("href") !== "#").length, 0, `${name}: no link goes anywhere`);
       assert.equal(pqa("button").filter((b) => b.getAttribute("type") !== "button").length, 0, `${name}: no button can submit`);
       assert.equal(pqa("[onclick], [onload], [onerror]").length, 0);
@@ -843,18 +961,15 @@ test("an error thrown while RENDERING the preview is contained too: the rest of 
 });
 
 // ======================= Wishlist page address =======================
-test("the Wishlist page address is shown read-only with a Copy button", async () => {
-  clipboard.length = 0;
+test("the Wishlist page tab no longer shows a page address or Copy button", async () => {
   const { element } = formApp();
   await mount(element);
   await goTab("Wishlist page");
-  const address = field("s-text-field", "Wishlist page address");
-  assert.equal(address.getAttribute("value"), `https://${SHOP}/apps/konvert-notify/my-wishlist`, "the existing route is shown, not a new one");
-  assert.ok(address.hasAttribute("readonly") || address.hasAttribute("readOnly"));
-  await click(byText("s-button", "Copy"));
-  await act(() => sleep(10));
-  assert.deepEqual(clipboard, [`https://${SHOP}/apps/konvert-notify/my-wishlist`]);
-  assert.ok(byText("s-button", "Copied"));
+  assert.equal(container.querySelector('[label="Wishlist page address"]'), null);
+  assert.equal(byText("s-button", "Copy"), undefined);
+  assert.ok(field("s-select", "Layout"));
+  assert.ok(field("s-switch", "Show the Wishlist icon in the header"));
+  assert.doesNotMatch(container.textContent, /store menu or a button/);
   await unmount();
 });
 
@@ -889,11 +1004,11 @@ test("Settings links to Wishlist Settings; the two switches still work exactly a
   assert.equal(/margin:\s*-/.test(rule(".kv-form-link p")), false, "no negative margin");
   const wishlistCard = byText("s-button", "Wishlist Settings").closest("section");
   assert.equal(wishlistCard.querySelector("s-switch").getAttribute("label"), "Enable Wishlist");
-  assert.equal(container.querySelectorAll("section")[1].querySelector("s-button"), null, "Notify Me has no such link");
+  assert.equal(container.querySelectorAll("section")[1].querySelector("s-button")?.textContent.trim(), "Notify Me Settings", "Notify Me has its own settings link, not the Wishlist one");
 
   const notify = container.querySelectorAll("s-switch")[1];
   await act(() => { notify.checked = false; fire(notify, "change"); });
-  await click(byText("s-button", "Save"));
+  await click(barSave());
   await act(() => sleep(30));
   assert.deepEqual(calls, [{ wishlistEnabled: "true", notifyMeEnabled: "false" }], "a switch save still posts only the two switches");
 

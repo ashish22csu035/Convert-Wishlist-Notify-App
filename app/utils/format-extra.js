@@ -30,7 +30,7 @@ export function deliveryReason(code) {
 // What each status means, shown as help text next to the filters.
 export const STATUS_HELP = {
   ACTIVE: "Waiting for the item to come back in stock.",
-  FULFILLED: "Notified: a restock email was accepted by the mail server.",
+  FULFILLED: "A restock email was accepted by the mail server. This does not confirm it reached the inbox or was opened.",
   UNSUBSCRIBED: "The customer opted out.",
   PENDING: "Queued: waiting for the email worker.",
   SENDING: "Being sent right now.",

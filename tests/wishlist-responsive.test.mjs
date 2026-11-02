@@ -54,12 +54,14 @@ const has = (body, property, value) =>
     .map((d) => d.trim().replace(/\s+/g, " "))
     .includes(`${property}: ${value}`);
 
-test("collection hearts are 44x44 touch targets that sit above a card's overlay link", () => {
+test("collection hearts are circles sized by the setting, keep a 44px tap area, and sit above a card's overlay link", () => {
   const heart = decl(".kw-btn--card");
   assert.ok(heart, "rule exists");
-  // Never below 44px: with the default 22px icon the size is max(44px, 22px + 22px) = 44px, as before the icon size became a setting.
-  const size = "max(44px, calc(var(--kw-collection-page-icon-size, 22) * 1px + 22px))";
+  // The button is twice the icon (the default 22px icon is the usual 44px circle) and square, so it scales with the setting
+  // and never goes oval. The 44px tap area is the ::after below.
+  const size = "calc(var(--kw-collection-page-icon-size, 22) * 2px)";
   assert.ok(has(heart, "width", size) && has(heart, "height", size));
+  assert.ok(has(decl(".kw-btn--card::after"), "width", "max(100%, 44px)") && has(decl(".kw-btn--card::after"), "height", "max(100%, 44px)"), "tap area of at least 44px");
   assert.ok(has(heart, "position", "absolute"));
   assert.ok(has(heart, "z-index", "10"), "above Dawn-style card overlay links (z-index 1), within the card's own stacking context");
   assert.ok(has(heart, "touch-action", "manipulation"));

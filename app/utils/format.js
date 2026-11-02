@@ -4,14 +4,26 @@ import { describePeriod } from "./period.js";
 const NUMBER = new Intl.NumberFormat("en-US");
 export const formatNumber = (value) => (typeof value === "number" ? NUMBER.format(value) : "Unavailable");
 
+// "XXX" is the placeholder the app stores before a shop's real currency is known.
+export const validCurrency = (code) => {
+  const upper = typeof code === "string" ? code.trim().toUpperCase() : "";
+  return /^[A-Z]{3}$/.test(upper) && upper !== "XXX" ? upper : null;
+};
+
+// An unknown currency is never guessed: the number is shown with a "currency unavailable" label, not a symbol.
 export function formatMoney(amount, currencyCode) {
   const value = Number(amount);
   if (amount === null || amount === undefined || amount === "" || !Number.isFinite(value)) return null;
-  try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: currencyCode || "USD" }).format(value);
-  } catch {
-    return NUMBER.format(value);
+  const currency = validCurrency(currencyCode);
+  if (currency) {
+    try {
+      return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value);
+    } catch {
+      // not a currency Intl knows: fall through to the unlabelled form
+    }
   }
+  const plain = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+  return `${plain} (currency unavailable)`;
 }
 
 // Fixed UTC format so the server render and the browser render always agree.
@@ -20,6 +32,17 @@ export function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+// "November 2, 2026 at 11:40 AM UTC" for the Analytics "Last updated" line. Always UTC, like every date and report in the app
+// (Shop.timezone is not read anywhere), and the same on the server and in the browser. null / unreadable -> null.
+const UPDATED_DATE = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+const UPDATED_TIME = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "UTC" });
+export function formatUpdatedAt(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${UPDATED_DATE.format(date)} at ${UPDATED_TIME.format(date)} UTC`;
 }
 
 // "5 minutes ago", measured against the time the server loaded the page, so it never differs between
@@ -87,24 +110,27 @@ export function rangeWords(range) {
   return `last ${typeof range === "object" ? range.days : range} days`;
 }
 
-export function attributionView(attribution, range) {
+// `storeCurrency` is the authenticated shop's currency from the Admin API. The currency the orders were
+// recorded in wins when present (the amounts are in it); the store currency covers periods with no orders.
+export function attributionView(attribution, range, storeCurrency = null) {
   if (!attribution || attribution.state === "needs_access") {
     return { setup: { display: "Set up", note: "Approve the new order permission (read_orders) in Shopify to start tracking orders and revenue." } };
   }
   if (attribution.state === "waiting") {
     return { setup: { display: "Waiting for orders", note: "No orders have been received yet. Revenue appears here after an order is paid." } };
   }
+  const currency = validCurrency(attribution.currency) ?? validCurrency(storeCurrency);
   const options = ATTRIBUTION_MODES.map(({ key, label }) => {
     const result = attribution[key];
     const unavailable = !result || result.revenue === null;
     const orders = result?.orders ?? 0;
     const details = unavailable ? [] : [`${formatNumber(orders)} attributed ${orders === 1 ? "order" : "orders"} · ${rangeWords(range)}`];
-    if (!unavailable && orders > 0) details.push(`Full order value: ${formatMoney(result.orderValue, attribution.currency)}`);
+    if (!unavailable && orders > 0) details.push(`Full order value: ${formatMoney(result.orderValue, currency)}`);
     return {
       key,
       label,
       value: unavailable ? null : orders,
-      display: unavailable ? undefined : formatMoney(result.revenue, attribution.currency) ?? undefined,
+      display: unavailable ? undefined : formatMoney(result.revenue, currency) ?? undefined,
       details,
       hint: `${ATTRIBUTION_CAPTIONS[key]} ${ATTRIBUTION_FOOTNOTE} ${ATTRIBUTION_ORDER_DATES}`,
       unavailableNote: "Orders in more than one currency cannot be added together.",

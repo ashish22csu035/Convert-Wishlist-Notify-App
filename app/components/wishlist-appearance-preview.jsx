@@ -10,6 +10,11 @@ import { PREVIEW_APP_ID, PREVIEW_HEIGHT, PREVIEW_VIEWPORTS, previewMarkup, previ
 // it follows every change at once; it saves nothing, runs no script, sends no request, and never touches a customer's
 // Wishlist, an event or a cart. The sample products are invented. A real theme has its own fonts, spacing and image
 // shapes, so it can only ever be approximate: check the real storefront after saving.
+//
+// The hearts in the sample page can be clicked, the way a customer would: an empty heart fills (aria-pressed="true", which
+// the storefront stylesheet draws in the merchant's SAVED colour) and a filled one empties again. That is React state of this
+// component only (`picks`, kept separately for the Desktop and the Mobile preview and per tab): no request, no Wishlist
+// record, nothing stored. The frame has no script, so the page's own listener is attached from here, after each write.
 
 export const PREVIEW_NOTE = "Approximate preview — your Shopify theme may differ";
 
@@ -20,13 +25,32 @@ const TAB_TITLES = { general: "Collection grid", productPage: "Product page", co
 // Puts the page for `tab` and the settings into the frame's document. Safe to run again and again: the document
 // is only written once, then the <html> attributes, variables and page are updated in place (scroll position is kept
 // while the merchant edits).
-function syncFrame(frame, tab, hooks) {
+const HEART = "[data-kw-button]";
+const SAVED_WORDS = [/^Saved to wishlist/, /^Add to wishlist/];
+
+// Shows each heart the way the preview state says. A heart the merchant has not clicked (in THIS preview size) goes back
+// to how the sample page drew it - its default / hover / saved example - which is remembered the first time it is seen,
+// so switching between Desktop and Mobile never carries one size's clicks into the other.
+function applyPicks(doc, tab, picks) {
+  doc.querySelectorAll(HEART).forEach((button, index) => {
+    if (!button.hasAttribute("data-pv-initial")) button.setAttribute("data-pv-initial", button.getAttribute("aria-pressed") ?? "false");
+    const saved = picks[`${tab}:${index}`] ?? button.getAttribute("data-pv-initial") === "true";
+    button.setAttribute("aria-pressed", String(saved));
+    const name = button.getAttribute("aria-label");
+    if (name) button.setAttribute("aria-label", name.replace(SAVED_WORDS[saved ? 1 : 0], saved ? "Saved to wishlist" : "Add to wishlist"));
+    const label = button.querySelector("[data-kw-label]");
+    if (label) label.textContent = saved ? "Saved to wishlist" : "Add to wishlist";
+  });
+}
+
+function syncFrame(frame, tab, hooks, picks = {}, onClick = null) {
   const doc = frame?.contentDocument;
   if (!doc || !doc.documentElement) return;
   if (!doc.getElementById(PREVIEW_APP_ID)) {
     doc.open();
     doc.write(SHELL);
     doc.close();
+    if (onClick) doc.addEventListener("click", onClick); // document.open() drops listeners, so it is attached after every write
   }
   const root = doc.documentElement;
   for (const attribute of [...root.attributes]) if (attribute.name.startsWith("data-kw-")) root.removeAttribute(attribute.name);
@@ -38,6 +62,7 @@ function syncFrame(frame, tab, hooks) {
     app.innerHTML = previewMarkup(tab);
     app.setAttribute("data-tab", tab);
   }
+  if (app) applyPicks(doc, tab, picks);
 }
 
 // What the saved settings switch off or cannot do, said next to the preview because the preview itself then shows nothing.
@@ -59,15 +84,37 @@ export function AppearancePreview({ tab, values, viewport = "desktop", onViewpor
   const [failed, setFailed] = useState(false);
   const stage = useRef(null);
   const [stageWidth, setStageWidth] = useState(0);
+  // Which hearts the merchant has clicked, per preview size: { desktop: { "<tab>:<n>": true|false }, mobile: { ... } }.
+  const [picks, setPicks] = useState({ desktop: {}, mobile: {} });
   const hooks = useMemo(() => storefrontHooks(toSparse(values)), [values]);
   const hooksKey = JSON.stringify(hooks);
   const view = PREVIEW_VIEWPORTS[viewport] ?? PREVIEW_VIEWPORTS.desktop;
 
   // Every change of settings or tab is applied to the frame at once. The frame's own load event applies it again for
   // browsers that replace a new frame's blank document after it is attached.
+  const latest = useRef(null);
+  latest.current = { tab, viewport };
+  // One stable listener for the frame's document. A click on a heart toggles it in the state; any other link click is
+  // stopped so the sample page can never navigate.
+  const onFrameClick = useRef((event) => {
+    const target = event.target;
+    const heart = target?.closest?.(HEART);
+    if (!heart) {
+      if (target?.closest?.("a")) event.preventDefault();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const index = [...heart.ownerDocument.querySelectorAll(HEART)].indexOf(heart);
+    const { tab: pageTab, viewport: size } = latest.current;
+    const key = `${pageTab}:${index}`;
+    const now = heart.getAttribute("aria-pressed") === "true";
+    setPicks((current) => ({ ...current, [size]: { ...current[size], [key]: !now } }));
+  }).current;
+
   const draw = () => {
     try {
-      syncFrame(frame.current, tab, hooks);
+      syncFrame(frame.current, tab, hooks, picks[viewport] ?? {}, onFrameClick);
       setFailed((was) => (was ? false : was));
     } catch (error) {
       console.error("[wishlist-settings] the preview could not be drawn", error?.name, String(error?.message ?? "").slice(0, 200));
@@ -77,7 +124,7 @@ export function AppearancePreview({ tab, values, viewport = "desktop", onViewpor
   useEffect(() => {
     draw();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- hooksKey stands for hooks
-  }, [tab, hooksKey]);
+  }, [tab, hooksKey, picks, viewport]);
 
   // The sample page is laid out at a real storefront width and scaled down to fit, so its breakpoints (the Wishlist
   // table, the product page columns) are the real ones. Without a measurable stage (tests) it is shown at full size.

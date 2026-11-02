@@ -20,6 +20,15 @@ export default function App() {
     setAppRendered(true); // from now on an authentication response is a client-side navigation, not a first page load
   }, []);
 
+  // One loading indicator for every page change: a spinner centred in the content area (the app's own frame, so Shopify's
+  // sidebar and header are never covered). While it shows, the page that is leaving fades out (css: html[data-kv-loading]),
+  // so half-old content never sits next to a spinner. Nothing is added to or removed from the page flow, so nothing shifts.
+  const loading = navigation.state === "loading";
+  useEffect(() => {
+    document.documentElement.toggleAttribute("data-kv-loading", loading);
+    return () => document.documentElement.removeAttribute("data-kv-loading");
+  }, [loading]);
+
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
@@ -30,10 +39,10 @@ export default function App() {
         <s-link href="/app/analytics">Analytics</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>
-      {navigation.state === "loading" ? (
-        <s-box padding="base">
-          <s-spinner accessibilityLabel="Loading" />
-        </s-box>
+      {loading ? (
+        <div className="kv-loading" role="status" aria-live="polite">
+          <s-spinner size="large" accessibilityLabel="Loading page" />
+        </div>
       ) : null}
       <Outlet />
     </AppProvider>

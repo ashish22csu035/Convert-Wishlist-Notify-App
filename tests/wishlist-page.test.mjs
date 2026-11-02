@@ -907,6 +907,70 @@ test("Notify Me on a sold-out saved variant sends that exact variant id and keep
   assert.equal(page.log.cart.length, 0);
 });
 
+test("after subscribing, hovering the button starts nothing: no request, no busy state, no loading class", async () => {
+  const page = await mount({ backend: { items: [SHIRT_SOLD_OUT] } });
+  const [row] = page.rows();
+  await row.find(".kw-btn-cart").click();
+  await tick();
+  const button = row.find(".kw-btn-cart");
+  assert.equal(button.textContent, "You're on the list!");
+  const before = { notify: page.log.notify.length, status: page.log.status.length, requests: page.log.requests.length, fetches: page.log.productFetches.length };
+  for (const type of ["mouseover", "mouseenter", "mousemove", "pointerenter", "focus"]) await button.fire(type);
+  await tick();
+  assert.deepEqual({ notify: page.log.notify.length, status: page.log.status.length, requests: page.log.requests.length, fetches: page.log.productFetches.length }, before, "hovering sends nothing");
+  assert.equal(button.disabled, true, "still the finished, locked state");
+  assert.equal(button.attrs["aria-busy"], undefined, "not marked busy");
+  assert.equal(/loading|busy|spinner/.test(button.className), false, "no loading class");
+  assert.equal(button.has("kw-btn-cart--notify"), true);
+  assert.equal(button.children.length, 0, "no spinner element inside");
+});
+
+test("while a subscription request is really in flight the button is marked busy, and it is not left busy afterwards", async () => {
+  const page = await mount({ backend: { items: [SHIRT_SOLD_OUT] } });
+  const [row] = page.rows();
+  const seen = [];
+  const original = globalThis.fetch;
+  void original;
+  const button = row.find(".kw-btn-cart");
+  const pending = button.click();
+  seen.push(button.attrs["aria-busy"]);
+  await pending;
+  await tick();
+  assert.equal(page.log.notify.length, 1);
+  assert.equal(row.find(".kw-btn-cart").attrs["aria-busy"], undefined, "busy is cleared once it is done");
+  assert.equal(row.find(".kw-btn-cart").textContent, "You're on the list!");
+});
+
+function specificity(selector) {
+  const stripped = selector.replace(/:not\(([^)]*)\)/g, " $1 "); // :not(x) counts as x
+  const attrs = (stripped.match(/\[[^\]]*\]/g) || []).length;
+  const classes = (stripped.match(/\.[A-Za-z_-][\w-]*/g) || []).length + attrs + (stripped.match(/:(?!:)[a-z-]+/g) || []).length;
+  const types = (stripped.replace(/\[[^\]]*\]/g, "").replace(/\.[\w-]+/g, "").match(/(^|[\s>+~])[a-z][\w-]*/gi) || []).length;
+  return [0, classes, types];
+}
+const higher = (a, b) => (a[1] - b[1] || a[2] - b[2]) > 0;
+
+test("the finished Notify Me button does not get the progress cursor (the blue ring on Windows): its rule out-ranks the generic disabled rule", () => {
+  const css = fs.readFileSync("extensions/konvert-wishlist/assets/konvert-wishlist.css", "utf8").split("\r\n").join("\n");
+  const cursorOf = (selector) => {
+    const start = css.indexOf(`\n${selector} {`);
+    assert.ok(start !== -1, `rule for ${selector}`);
+    const match = [null, css.slice(start, css.indexOf("}", start))];
+    assert.ok(match, `rule for ${selector}`);
+    return /cursor:\s*([a-z-]+)/.exec(match[1])?.[1];
+  };
+  const generic = ".kw-btn-cart[disabled]:not(.kw-btn-cart--disabled)";
+  const done = ".kw-btn-cart.kw-btn-cart--notify[disabled]:not(.kw-btn-cart--disabled)";
+  const busy = ".kw-btn-cart.kw-btn-cart--notify[disabled][aria-busy=\"true\"]:not(.kw-btn-cart--disabled)";
+  assert.equal(cursorOf(generic), "progress", "every other pending button still shows progress");
+  assert.equal(cursorOf(done), "default");
+  assert.equal(cursorOf(busy), "progress", "a request really in flight keeps it");
+  assert.ok(higher(specificity(done), specificity(generic)), `${done} must beat ${generic}: ${specificity(done)} vs ${specificity(generic)}`);
+  assert.ok(higher(specificity(busy), specificity(done)));
+  assert.ok(css.indexOf(done) > css.indexOf(generic) && css.indexOf(busy) > css.indexOf(done), "and they come later in the file");
+  assert.equal(/\.kw-btn-cart--notify[^{]*:hover[^{]*\{[^}]*(cursor:\s*(progress|wait)|animation|spinner)/.test(css), false, "no hover rule starts a loading look");
+});
+
 test("repeated Notify Me clicks send one request", async () => {
   const page = await mount({ backend: { items: [SHIRT_SOLD_OUT] } });
   const [row] = page.rows();

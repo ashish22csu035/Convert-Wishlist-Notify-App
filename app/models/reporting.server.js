@@ -67,13 +67,64 @@ const withAll = (keys, counts) => Object.fromEntries(keys.map((key) => [key, cou
 
 const range = (from, to) => ({ ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) });
 
-async function activityCounts(shopId, from, to) {
+export async function activityCounts(shopId, from, to) {
   const rows = await prisma.activityEvent.groupBy({
     by: ["type"],
     where: { shopId, ...(from || to ? { occurredAt: range(from, to) } : {}) },
     _count: { _all: true },
   });
   return withAll(ACTIVITY_TYPES, countMap(rows, "type"));
+}
+
+// The event counts that AnalyticsDaily stores, by the column that holds them.
+const SUMMARY_COLUMNS = {
+  WISHLIST_ADDED: "wishlistAdded",
+  WISHLIST_REMOVED: "wishlistRemoved",
+  WISHLIST_PRODUCT_CLICKED: "wishlistProductClicked",
+  NOTIFY_SUBSCRIBED: "notifySubscribed",
+  NOTIFY_UNSUBSCRIBED: "notifyUnsubscribed",
+  RESTOCK_EMAIL_SENT: "restockEmailSent",
+};
+
+// What the Analytics screen shows for [from, to), read ONLY from the stored daily summaries (AnalyticsDaily, kept
+// current by the worker, today included): the event counts, and the Wishlist / Notify Me session counts. ActivityEvent
+// is never queried, and nothing falls back to it.
+//   - Coverage: every UTC day from the shop's install day (or `from`, if later) to today needs a finished row. A row
+//     with notifyUnsubscribed NULL was written before that column existed and does not count. `coverage` says how many
+//     of the expected days were there.
+//   - Counts: the sum of the rows that exist; a missing day contributes nothing. When coverage is incomplete the screen
+//     says so (the numbers are then a lower bound) and a comparison to this period is not offered.
+//   - Sessions: distinct, from the usable daily rows: sum(sessions) - sum(carried) for every counted day whose previous
+//     day is also counted (a session over midnight is in two rows; "carried" is how many of a day's sessions began the
+//     day before). Missing days and days with NULL sessions are left out, so valid days still show; the figure is then
+//     a lower bound. null (unavailable) only when no row is usable; 0 when the range ends before the shop was installed.
+// `to` is exclusive; null means "through today".
+export async function summarizedActivity(shop, from, to, now = new Date()) {
+  const end = Math.min(to ? to.getTime() : Infinity, startOfUtcDay(now).getTime() + DAY_MS);
+  const start = Math.max(from.getTime(), startOfUtcDay(shop.installedAt).getTime());
+  const expected = Math.max(0, Math.round((end - start) / DAY_MS));
+  const rows = expected
+    ? (await prisma.analyticsDaily.findMany({ where: { shopId: shop.id, day: { gte: new Date(start), lt: new Date(end) } }, orderBy: { day: "asc" } })).filter((row) => row.notifyUnsubscribed !== null)
+    : [];
+  const counts = Object.fromEntries(ACTIVITY_TYPES.map((type) => [type, 0]));
+  for (const row of rows) for (const [type, column] of Object.entries(SUMMARY_COLUMNS)) counts[type] += row[column];
+  const complete = rows.length === expected;
+  // Sessions from the rows that are usable: a row whose session count is NULL (that day holds events with no session) is
+  // skipped rather than read as zero, and a day with no row adds nothing. A day's "carried" sessions are subtracted only
+  // when the PREVIOUS calendar day is itself a counted row, because only then were they counted twice. null when no row is
+  // usable at all. With missing or skipped days the figure is a lower bound, never an invented one.
+  const sessions = (daily, carried) => {
+    const usable = rows.filter((row) => row[daily] !== null && row[carried] !== null);
+    if (expected === 0) return 0; // the range ends before tracking began: nothing to count, and nothing missing
+    if (usable.length === 0) return null;
+    const counted = new Set(usable.map((row) => row.day.getTime()));
+    return usable.reduce((total, row) => total + row[daily] - (counted.has(row.day.getTime() - DAY_MS) ? row[carried] : 0), 0);
+  };
+  return {
+    counts,
+    sessions: { wishlist: sessions("wishlistSessions", "wishlistSessionsCarried"), notifyMe: sessions("notifyMeSessions", "notifyMeSessionsCarried") },
+    coverage: { expectedDays: expected, availableDays: rows.length, complete },
+  };
 }
 
 async function subscriptionCounts(shopId) {
@@ -261,6 +312,61 @@ export async function getAnalytics(shop, input = DEFAULT_DAYS, now = new Date())
   return { ...dashboard, topProducts, topCustomers: customers, sessionActivity: { wishlist: sessionCounts[0], notifyMe: sessionCounts[1] } };
 }
 
+// sessionsWithActivity for one feature and period in ONE query instead of two: the distinct sessions, and how many
+// of the same events carry no session (COUNT(DISTINCT col) skips NULLs; COUNT(*) - COUNT(col) is exactly the NULLs).
+// Same events, same filters, same null-when-unattributed rule as sessionsWithActivity above.
+export async function sessionCountOf(shopId, feature, from, until) {
+  const types = SESSION_EVENT_TYPES[feature];
+  const end = until ?? new Date("9999-12-31T00:00:00Z");
+  const [row] = await prisma.$queryRaw`SELECT COUNT(DISTINCT browsingSessionId) AS counted, COUNT(*) - COUNT(browsingSessionId) AS unattributed FROM ActivityEvent WHERE shopId = ${shopId} AND feature = ${feature} AND type IN (${Prisma.join(types)}) AND occurredAt >= ${from} AND occurredAt < ${end}`;
+  return Number(row?.unattributed ?? 0) > 0 ? null : Number(row?.counted ?? 0);
+}
+
+// When the Analytics figures were last brought up to date for a shop: the newest finished AnalyticsDaily row's updatedAt.
+// The worker saves each calculated day with updatedAt = the moment its calculation STARTED (writeAnalyticsDay), so this is
+// "the stored figures reflect events up to <this time>", and it only moves when a day is really written. createdAt is not
+// used (a row keeps it for life), nor the request time. Rows from before notifyUnsubscribed existed are not finished
+// summaries (see summarizedActivity) and are ignored. One MAX over this shop's rows; null when there is none yet.
+export async function latestAnalyticsUpdate(shopId) {
+  const { _max } = await prisma.analyticsDaily.aggregate({ _max: { updatedAt: true }, where: { shopId, notifyUnsubscribed: { not: null } } });
+  return _max.updatedAt ? _max.updatedAt.toISOString() : null;
+}
+
+// What the Analytics screen shows, and nothing else: the window and previous-period event counts, the session
+// cards, the two leaderboards. The counts and sessions come from the stored daily summaries (summarizedActivity), never
+// from ActivityEvent; getAnalytics (above) is the live reference loader and getDashboard is untouched.
+// The top customers still rank live activity (one grouped read of ActivityEvent for the period), the top products read
+// the saved items. Every query is independent, so they all run at once.
+export async function getAnalyticsOverview(shop, input = DEFAULT_DAYS, now = new Date()) {
+  const period = resolvePeriod(input, now);
+  const { since, until, days } = period;
+  const { since: prevSince } = previousOf(period);
+  const comparable = shop.installedAt <= prevSince; // tracking covers the whole previous period
+  const [current, prior, topProducts, customers, lastUpdated] = await Promise.all([
+    summarizedActivity(shop, since, until, now),
+    comparable ? summarizedActivity(shop, prevSince, since, now) : Promise.resolve(null),
+    topSavedProducts(shop.id, 5),
+    topCustomers(shop.id, since, until, 5),
+    latestAnalyticsUpdate(shop.id),
+  ]);
+  // A previous period with missing days would make every comparison look like growth: it is not offered.
+  const previous = prior?.coverage.complete ? prior : null;
+  return {
+    days,
+    period: publicPeriod(period),
+    comparable,
+    activity: { window: current.counts, previous: previous ? previous.counts : null },
+    topProducts,
+    topCustomers: customers,
+    sessionActivity: {
+      wishlist: { current: current.sessions.wishlist, previous: previous ? previous.sessions.wishlist : null },
+      notifyMe: { current: current.sessions.notifyMe, previous: previous ? previous.sessions.notifyMe : null },
+    },
+    coverage: current.coverage,
+    lastUpdated, // ISO time of the newest finished daily summary, or null; it travels with the figures (and so with their cache entry)
+  };
+}
+
 export async function getWishlistOverview(shopId, input = DEFAULT_DAYS, now = new Date()) {
   const period = resolvePeriod(input, now);
   const { days } = period;
@@ -271,7 +377,6 @@ export async function getWishlistOverview(shopId, input = DEFAULT_DAYS, now = ne
 const WISHLIST_ORDER = {
   saves: [{ _count: { id: "desc" } }, { variantGid: "asc" }],
   recent: [{ _max: { createdAt: "desc" } }, { variantGid: "asc" }],
-  name: [{ _max: { productTitle: "asc" } }, { variantGid: "asc" }],
 };
 
 // Saved products, one row per variant, searchable by the title stored with the wishlist item.
@@ -381,8 +486,10 @@ export async function getNotifyOverview(shopId, input = DEFAULT_DAYS, now = new 
 // Subscriptions: product/variant, status and dates. No customer, email or consent details.
 // Not limited by the date range: it lists every subscription, newest first, with the result of the
 // latest restock email for each (the status of that email, never the recipient).
+// Opted-out subscriptions are not listed (the unsubscribe itself is still recorded and processed elsewhere).
+// Each row also carries `waitingCustomers`: the ACTIVE subscriptions for the same variant, counted with one grouped query.
 export async function getSubscriptions(shopId, { status = "all", page = 1 } = {}) {
-  const where = { shopId, ...(status !== "all" ? { status } : {}) };
+  const where = { shopId, status: status !== "all" ? status : { in: ["ACTIVE", "FULFILLED"] } };
   const [total, rows] = await Promise.all([
     prisma.notifySubscription.count({ where }),
     prisma.notifySubscription.findMany({
@@ -394,7 +501,10 @@ export async function getSubscriptions(shopId, { status = "all", page = 1 } = {}
     }),
   ]);
   const latest = new Map();
+  const waiting = new Map();
   if (rows.length) {
+    const grouped = await prisma.notifySubscription.groupBy({ by: ["variantGid"], where: { shopId, status: "ACTIVE", variantGid: { in: [...new Set(rows.map((row) => row.variantGid))] } }, _count: { _all: true } });
+    for (const group of grouped) waiting.set(group.variantGid, group._count._all);
     const emails = await prisma.emailDelivery.findMany({
       where: { shopId, subscriptionId: { in: rows.map((row) => row.id) } },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -410,6 +520,7 @@ export async function getSubscriptions(shopId, { status = "all", page = 1 } = {}
         ...row,
         productId: numericId(row.productGid),
         variantId: numericId(row.variantGid),
+        waitingCustomers: waiting.get(row.variantGid) ?? 0,
         lastEmail: email ? { status: email.status, restockCycle: email.restockCycle, at: email.sentAt ?? email.createdAt } : null,
       };
     }),
@@ -417,6 +528,8 @@ export async function getSubscriptions(shopId, { status = "all", page = 1 } = {}
 }
 
 // Restock emails queued inside the date range (queued time, UTC), optionally one status.
+// Each row also carries `emailsSent`: SENT emails for the same variant queued inside the same date range (whatever the
+// status filter), counted with one grouped query.
 export async function getDeliveries(shopId, { status = "all", page = 1, days = DEFAULT_DAYS } = {}, now = new Date()) {
   const period = resolvePeriod(days, now);
   const where = { shopId, createdAt: range(period.since, period.until), ...(status !== "all" ? { status } : {}) };
@@ -424,7 +537,12 @@ export async function getDeliveries(shopId, { status = "all", page = 1, days = D
     prisma.emailDelivery.count({ where }),
     prisma.emailDelivery.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * PAGE_SIZE, take: PAGE_SIZE, select: deliverySelect }),
   ]);
-  return { total, rows: rows.map(toDelivery) };
+  const sent = new Map();
+  if (rows.length) {
+    const grouped = await prisma.emailDelivery.groupBy({ by: ["variantGid"], where: { shopId, status: "SENT", createdAt: range(period.since, period.until), variantGid: { in: [...new Set(rows.map((row) => row.variantGid))] } }, _count: { _all: true } });
+    for (const group of grouped) sent.set(group.variantGid, group._count._all);
+  }
+  return { total, rows: rows.map((row) => ({ ...toDelivery(row), emailsSent: sent.get(row.variantGid) ?? 0 })) };
 }
 
 const CUSTOMER_ORDER = {
@@ -523,8 +641,8 @@ export async function getAttribution(shopId, input = DEFAULT_DAYS, { scopeGrante
   const period = resolvePeriod(input, now);
   const { since, days } = period;
   const base = { days, period: publicPeriod(period), since };
-  const collected = await prisma.shopifyOrder.count({ where: { shopId } });
-  if (collected === 0) return { ...base, state: scopeGranted ? "waiting" : "needs_access" };
+  const collected = await prisma.shopifyOrder.findFirst({ where: { shopId }, select: { id: true } }); // only "any order at all?" matters
+  if (!collected) return { ...base, state: scopeGranted ? "waiting" : "needs_access" };
 
   const rows = await prisma.orderAttribution.findMany({
     where: { shopId, status: "ACTIVE", order: { placedAt: period.until ? { gte: since, lt: period.until } : { gte: since, lte: now } } },

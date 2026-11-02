@@ -24,17 +24,17 @@ const contrast = (a, b) => {
 };
 
 test("the theme tokens are defined once and form a light palette", () => {
-  for (const name of ["kv-bg", "kv-surface", "kv-surface-2", "kv-border", "kv-hover", "kv-text", "kv-subdued", "kv-violet", "kv-blue", "kv-green", "kv-amber", "kv-rose", "kv-cyan", "kv-pink", "kv-on-accent"]) {
+  for (const name of ["kv-bg", "kv-surface", "kv-surface-2", "kv-border", "kv-hover", "kv-text", "kv-subdued", "kv-primary", "kv-primary-hover", "kv-violet", "kv-blue", "kv-green", "kv-amber", "kv-rose", "kv-cyan", "kv-pink", "kv-tone-1", "kv-tone-2", "kv-tone-3", "kv-tone-4", "kv-on-accent"]) {
     assert.ok(tokens[name], `${name} is a token`);
   }
-  assert.equal(tokens["kv-bg"].toLowerCase(), "#f7f8fa");
+  assert.equal(tokens["kv-bg"].toLowerCase(), "#f7f7f7");
   assert.equal(tokens["kv-surface"].toLowerCase(), "#ffffff", "cards are white");
   assert.equal(tokens["kv-surface-2"].toLowerCase(), "#ffffff", "inputs and dropdowns are white");
   assert.equal(tokens["kv-border"].toLowerCase(), "#e5e7eb");
   assert.equal(tokens["kv-hover"].toLowerCase(), "#f3f4f6");
-  assert.equal(tokens["kv-text"].toLowerCase(), "#202124");
-  assert.equal(tokens["kv-subdued"].toLowerCase(), "#666d7b");
-  assert.deepEqual([tokens["kv-violet"], tokens["kv-blue"], tokens["kv-green"], tokens["kv-amber"], tokens["kv-rose"]].map((c) => c.toLowerCase()), ["#7c3aed", "#2563eb", "#15803d", "#cc6a05", "#dc2626"]);
+  assert.equal(tokens["kv-text"].toLowerCase(), "#171717");
+  assert.equal(tokens["kv-subdued"].toLowerCase(), "#5f6672");
+  assert.deepEqual([tokens["kv-violet"], tokens["kv-blue"], tokens["kv-green"], tokens["kv-amber"], tokens["kv-rose"]].map((c) => c.toLowerCase()), ["#000000", "#000000", "#15803d", "#cc6a05", "#dc2626"]);
   for (const name of ["kv-bg", "kv-surface", "kv-hover"]) assert.ok(luminance(tokens[name]) > 0.9, `${name} is light`);
   assert.match(css, /color-scheme: light;/);
   assert.equal(/color-scheme:\s*dark/.test(css), false, "no dark scheme is requested anywhere");
@@ -43,12 +43,13 @@ test("the theme tokens are defined once and form a light palette", () => {
 test("text and accents are readable on every surface (WCAG AA, 4.5:1)", () => {
   for (const surface of ["kv-bg", "kv-surface", "kv-hover"]) {
     // accent colours are never used as text on the hover grey (the delta chips sit on white)
-    for (const ink of surface === "kv-hover" ? ["kv-text", "kv-subdued"] : ["kv-text", "kv-subdued", "kv-violet", "kv-blue", "kv-green", "kv-rose", "kv-cyan", "kv-pink"]) {
+    for (const ink of surface === "kv-hover" ? ["kv-text", "kv-subdued"] : ["kv-text", "kv-subdued", "kv-primary", "kv-green", "kv-rose", "kv-cyan"]) {
       assert.ok(contrast(tokens[ink], tokens[surface]) >= 4.5, `${ink} on ${surface}: ${contrast(tokens[ink], tokens[surface]).toFixed(2)}`);
     }
+    assert.ok(contrast(tokens["kv-pink"], tokens[surface]) >= 3, "the mid chart green meets 3:1 for graphics");
     assert.ok(contrast(tokens["kv-amber"], tokens[surface]) >= 3, "amber (warnings, chart marks) meets the 3:1 needed for graphics");
   }
-  for (const accent of ["kv-violet", "kv-blue", "kv-green", "kv-rose"]) {
+  for (const accent of ["kv-primary", "kv-primary-hover", "kv-green", "kv-rose"]) {
     assert.ok(contrast(tokens["kv-on-accent"], tokens[accent]) >= 4.5, `text on a selected ${accent} control`);
   }
   // KPI cards are white; the accent tint only fills the small icon chip
@@ -60,7 +61,9 @@ test("text and accents are readable on every surface (WCAG AA, 4.5:1)", () => {
 });
 
 test("no dark surface, dark control or light-on-dark text is left in the stylesheet: colours are tokens", () => {
-  const body = css.slice(css.indexOf("/* ---------- Page header"));
+  // The Notify Me preview draws a SAMPLE storefront page (serif type, dark text, like a real shop): those .kv-np-* rules are
+  // the shop's look, not the merchant UI, so they are not held to the merchant palette.
+  const body = css.slice(css.indexOf("/* ---------- Page header")).split("\n").filter((line) => !line.startsWith(".kv-np-")).join("\n");
   for (const hex of [...body.matchAll(/#[0-9a-fA-F]{3,6}\b/g)].map((m) => m[0].toLowerCase())) {
     const full = hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex;
     assert.ok(luminance(full) > 0.5, `${hex} must be a light tint; dark colours come only from the text and accent tokens`);
@@ -73,13 +76,13 @@ test("no dark surface, dark control or light-on-dark text is left in the stylesh
 test("the standard controls are themed: selected, hover, disabled and keyboard focus are distinguishable", () => {
   assert.match(css, /\.kv-seg-btn\.on \{[^}]*background: var\(--accent\);[^}]*color: var\(--kv-on-accent\);/s);
   assert.match(css, /\.kv-seg-btn:focus-visible \{[^}]*outline:/s);
-  assert.match(css, /\.kv-tab\[aria-current="page"\] \{[^}]*border-color: var\(--kv-blue\)/s);
+  assert.match(css, /\.kv-tab\[aria-current="page"\] \{[^}]*border-color: var\(--kv-primary\)/s);
   assert.match(css, /\.kv-pager span\.btn \{\s*color: var\(--kv-disabled\);/);
   assert.match(css, /\.kv-tab:hover \{\s*background: var\(--kv-hover\);/);
   assert.ok(contrast(tokens["kv-disabled"], tokens["kv-surface-2"]) >= 2.5 && contrast(tokens["kv-disabled"], tokens["kv-surface-2"]) < contrast(tokens["kv-subdued"], tokens["kv-surface-2"]), "disabled is dimmer than secondary text");
-  assert.match(css, /\.kv-range-custom input\[type="date"\] \{[^}]*background: var\(--kv-surface-2\)/s);
+  assert.match(css, /\.kv-cal \{[^}]*position: fixed;[^}]*z-index: 1000;[^}]*background: var\(--kv-surface\)/s);
   assert.match(css, /\.kv-info-panel \{[^}]*background: var\(--kv-surface-2\)/s);
-  assert.match(css, /\.kv :focus-visible \{\s*outline-color: var\(--kv-blue\);/);
+  assert.match(css, /\.kv :focus-visible \{\s*outline-color: var\(--kv-primary\);/);
 });
 
 test("the light page panel wraps the app content only: the Shopify shell is not restyled", () => {
@@ -118,8 +121,8 @@ test("chart and funnel colours: features keep their colour, series never share o
   assert.equal(new Set(wishlist).size, 3);
   assert.equal(new Set(notify).size, 3);
   assert.equal(fs.readFileSync("app/components/activity-chart.jsx", "utf8").includes('fill="#fff"'), false, "chart dots take the card colour");
-  assert.match(css, /\.kv-funnel\[data-feature="notifyMe"\] \.kv-funnel-stage\.s1 \.kv-funnel-shape > div \{ background: var\(--kv-blue\); \}/);
-  assert.match(css, /\.kv-funnel-stage\.s4 \.kv-funnel-shape > div \{[^}]*var\(--kv-green\)/);
+  assert.equal(css.includes('.kv-funnel[data-feature="notifyMe"] .kv-funnel-stage.s1'), false, "both funnels share one green family");
+  assert.match(css, /\.kv-funnel-stage\.s4 \.kv-funnel-shape > div \{[^}]*var\(--kv-tone-4\)/);
   const funnel = fs.readFileSync("app/components/product-funnel.jsx", "utf8");
   assert.match(funnel, /data-feature={feature}/);
   assert.match(funnel, /feature={funnel\.feature}/);

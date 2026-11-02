@@ -177,7 +177,7 @@
       })
       .then(function (json) {
         if (!json || typeof json !== 'object') return null;
-        var value = { wishlist: json.wishlist !== false, notifyMe: json.notifyMe !== false, appearance: json.appearance && typeof json.appearance === 'object' ? json.appearance : null };
+        var value = { wishlist: json.wishlist !== false, notifyMe: json.notifyMe !== false, appearance: json.appearance && typeof json.appearance === 'object' ? json.appearance : null, notifyButton: json.notifyButton && typeof json.notifyButton === 'object' ? json.notifyButton : null };
         try {
           window.sessionStorage.setItem(FEATURES_KEY, JSON.stringify({ t: Date.now(), v: value }));
         } catch (error) {
@@ -199,6 +199,27 @@
       document.documentElement.classList.add('kw-wishlist-off');
     }
     if (features.notifyMe === false) config.notifyEnabled = false;
+    applyNotifyButton(features.notifyButton);
+  }
+
+  // Notify Me Settings > Button (sparse, validated by the server; every value is checked again here). The label replaces
+  // the theme's translated "Notify Me" text; style and colours become attributes and variables that konvert-wishlist.css
+  // turns into the button's look. Nothing is applied for a shop that never customised the button.
+  function applyNotifyButton(b) {
+    var root = document.documentElement;
+    ['--kw-notify-bg', '--kw-notify-text'].forEach(function (name) { root.style.removeProperty(name); });
+    ['data-kw-notify-style', 'data-kw-notify-bg', 'data-kw-notify-text'].forEach(function (name) { root.removeAttribute(name); });
+    if (!b || typeof b !== 'object') return;
+    if (typeof b.text === 'string' && b.text.trim() && b.text.length <= 40 && config.text) config.text.notifyMe = b.text.trim();
+    if (b.style === 'filled' || b.style === 'outline') root.setAttribute('data-kw-notify-style', b.style);
+    if (typeof b.bgColor === 'string' && /^#[0-9a-f]{6}$/i.test(b.bgColor)) {
+      root.style.setProperty('--kw-notify-bg', b.bgColor);
+      root.setAttribute('data-kw-notify-bg', '1');
+    }
+    if (typeof b.textColor === 'string' && /^#[0-9a-f]{6}$/i.test(b.textColor)) {
+      root.style.setProperty('--kw-notify-text', b.textColor);
+      root.setAttribute('data-kw-notify-text', '1');
+    }
   }
 
   // Wishlist Settings (sparse: only what the merchant changed). Words and on/off become data-kw-<section>-<key> attributes
@@ -239,7 +260,10 @@
     }
   }
   var early = readCache(); // last known look first: no flash of the default one
-  if (early && early.v) applyAppearance(early.v.appearance);
+  if (early && early.v) {
+    applyAppearance(early.v.appearance);
+    applyNotifyButton(early.v.notifyButton);
+  }
 
   window.KonvertWishlist = kw;
 

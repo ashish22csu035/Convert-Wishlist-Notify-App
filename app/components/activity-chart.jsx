@@ -1,7 +1,11 @@
 /* eslint-disable react/prop-types -- plain JavaScript project: shared helper components are not given PropTypes */
 
+import { useState } from "react";
+
 // A small dependency-free line/area chart drawn as SVG. It only draws the numbers it is given:
 // one value per day per series, from real counts. Nothing is smoothed, extrapolated or invented.
+// Hovering (or touching, or arrowing through) a day shows a tooltip with that day's exact value for EVERY series, read from
+// the same arrays the lines are drawn from.
 
 const W = 640;
 const H = 220;
@@ -16,9 +20,12 @@ export function niceMax(value) {
 }
 
 const monthDay = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+export const longDay = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+const count = (value) => new Intl.NumberFormat("en-US").format(value);
 
 // days: ["2026-10-01", ...]; series: [{ key, label, color, values: [number, ...] }]
 export function ActivityChart({ days, series, label }) {
+  const [hover, setHover] = useState(null); // index of the day under the pointer / focus, or null
   const total = series.reduce((sum, s) => sum + s.values.reduce((a, b) => a + b, 0), 0);
   if (days.length === 0 || total === 0) {
     return (
@@ -35,6 +42,21 @@ export function ActivityChart({ days, series, label }) {
   const y = (v) => PAD.top + plotH - (v / max) * plotH;
   const ticks = [0, 1, 2, 3, 4].map((i) => (max / 4) * i);
   const labelEvery = Math.max(1, Math.ceil(days.length / 6));
+  const shown = hover !== null && hover < days.length ? hover : null;
+  const step = (delta) => setHover((current) => (current === null ? (delta > 0 ? 0 : days.length - 1) : Math.min(days.length - 1, Math.max(0, current + delta))));
+  const onKeyDown = (event) => {
+    if (event.key === "ArrowRight") step(1);
+    else if (event.key === "ArrowLeft") step(-1);
+    else if (event.key === "Home") setHover(0);
+    else if (event.key === "End") setHover(days.length - 1);
+    else if (event.key === "Escape") setHover(null);
+    else return;
+    event.preventDefault();
+  };
+  // The tooltip sits inside the plot (never above it, where the scrolling chart box would clip it) and flips to the
+  // other side of the guide line in the right half of the chart, so it stays fully inside.
+  const tooltipLeft = shown === null ? 0 : (x(shown) / W) * 100;
+  const flip = shown !== null && x(shown) > PAD.left + plotW / 2;
   const summary = `${label}. ${series.map((s) => `${s.label}: ${s.values.reduce((a, b) => a + b, 0)} in total`).join("; ")}.`;
 
   return (
@@ -47,6 +69,8 @@ export function ActivityChart({ days, series, label }) {
         ))}
       </div>
       <div className="kv-chart-scroll">
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions -- a chart region read with the arrow keys; the tooltip is announced through role="status" */}
+      <div className="kv-chart-wrap" role="group" tabIndex={0} aria-label={`${summary} Use the left and right arrow keys to read each day.`} onKeyDown={onKeyDown} onFocus={() => setHover((current) => current ?? days.length - 1)} onBlur={() => setHover(null)} onMouseLeave={() => setHover(null)}>
       <svg className="kv-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={summary}>
         {ticks.map((tick) => (
           <g key={tick}>
@@ -80,7 +104,44 @@ export function ActivityChart({ days, series, label }) {
             </g>
           );
         })}
+        {shown !== null ? (
+          <g pointerEvents="none">
+            <line className="guide" x1={x(shown)} x2={x(shown)} y1={PAD.top} y2={PAD.top + plotH} />
+            {series.map((s) => (
+              <circle key={s.key} className="hover-dot" cx={x(shown)} cy={y(s.values[shown])} r="4.5" fill={s.color} stroke="var(--kv-surface)" strokeWidth="2" />
+            ))}
+          </g>
+        ) : null}
+        {days.map((day, i) => (
+          <rect
+            key={day}
+            className="hit"
+            data-day={day}
+            x={i === 0 ? PAD.left - 4 : (x(i - 1) + x(i)) / 2}
+            width={(i === days.length - 1 ? W - PAD.right + 4 : (x(i) + x(i + 1)) / 2) - (i === 0 ? PAD.left - 4 : (x(i - 1) + x(i)) / 2)}
+            y={PAD.top}
+            height={plotH}
+            fill="transparent"
+            onMouseEnter={() => setHover(i)}
+            onMouseMove={() => setHover(i)}
+            onTouchStart={() => setHover(i)}
+          />
+        ))}
       </svg>
+      {shown !== null ? (
+        <div className={`kv-tooltip${flip ? " left" : ""}`} role="status" data-testid="chart-tooltip" style={{ left: `${tooltipLeft}%` }}>
+          <div className="kv-tooltip-date">{longDay(days[shown])}</div>
+          <ul>
+            {series.map((s) => (
+              <li key={s.key} style={{ "--dot": s.color }}>
+                <span className="kv-tooltip-name">{s.label}</span>
+                <strong>{count(s.values[shown])}</strong>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      </div>
       </div>
     </div>
   );

@@ -4,7 +4,9 @@ import { useBlocker, useFetcher, useLocation, useNavigate } from "react-router";
 import { withEmbeddedParams } from "../utils/embedded-url";
 import { OPTION_LABELS, SPEC, isAppearanceDirty, sectionDefaults, validateAppearance } from "../utils/wishlist-appearance-shared";
 import { Page } from "./merchant-ui";
-import { WcField, WcSelect, WcSwitch, flags } from "./wc-fields";
+import { NativeSaveBar } from "./native-save-bar";
+import { themeEditorLinks } from "../utils/theme-editor";
+import { WcField, WcSelect, WcSwitch } from "./wc-fields";
 import { AppearancePreview, PreviewBoundary } from "./wishlist-appearance-preview";
 
 // Wishlist Settings: how the Wishlist looks and behaves on the storefront, in four tabs that share ONE state object, so
@@ -18,8 +20,6 @@ const TABS = [
   { key: "collectionPage", label: "Collection page" },
   { key: "wishlistPage", label: "Wishlist page" },
 ];
-
-const PAGE_PATH = "/apps/konvert-notify/my-wishlist";
 
 // "" -> null (nullable) / "" (not nullable, so the server rule reports it); digits -> number; anything else is kept as
 // typed so the error message can point at it.
@@ -61,10 +61,7 @@ function NumberControl({ label, value, onValue, error, details, min, max, placeh
 // Things the app cannot do from here: the theme editor decides whether the app embed is on and where the product
 // button block sits.
 function ThemeEditorNotice({ shop, apiKey }) {
-  const editor = `https://${shop}/admin/themes/current/editor`;
-  const key = encodeURIComponent(apiKey || "");
-  const embedUrl = key ? `${editor}?context=apps&activateAppId=${key}/wishlist-embed` : `${editor}?context=apps`;
-  const blockUrl = key ? `${editor}?template=product&addAppBlockId=${key}/wishlist-button&target=mainSection` : `${editor}?template=product`;
+  const { embedUrl, blockUrl } = themeEditorLinks(shop, apiKey);
   return (
     <s-banner tone="info" heading="Some things are set in your theme editor">
       These settings change how the Wishlist looks. They cannot turn on something your theme does not have yet: the Wishlist embed (header icon, hearts on product cards) must be on, and the Wishlist button block must be added to your product page. Where
@@ -87,7 +84,6 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
   const [values, setValues] = useState(appearance);
   const [saved, setSaved] = useState(appearance); // what the server last confirmed
   const [notice, setNotice] = useState(null); // the server's last answer, until the merchant edits or discards
-  const [copied, setCopied] = useState(false);
   // Which sample screen size the preview shows, per tab. A view choice only: it is not part of the settings and is never saved.
   const [viewports, setViewports] = useState({ general: "desktop", productPage: "desktop", collectionPage: "mobile", wishlistPage: "desktop" });
 
@@ -129,17 +125,6 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
   };
   const reset = () => setValues((current) => ({ ...current, [tab]: sectionDefaults(tab) }));
   const justSaved = notice?.ok && !dirty;
-
-  const pageUrl = `https://${shop}${PAGE_PATH}`;
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(pageUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false); // the field above stays selectable
-    }
-  };
 
   const g = values.general;
   const p = values.productPage;
@@ -223,7 +208,7 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
           error={err("collectionPage", "iconSize")}
           min={SPEC.collectionPage.iconSize.min}
           max={SPEC.collectionPage.iconSize.max}
-          details="The button around the icon is never smaller than 44px, so it stays easy to tap."
+          details="Sizes the whole round button, not just the heart: the button is twice this size (22 gives the usual 44px button). Taps are always accepted in at least a 44px area."
         />
         <NumberControl
           label="Background opacity (%)"
@@ -246,10 +231,6 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
           checked={w.headerIcon}
           onChecked={set("wishlistPage", "headerIcon")}
         />
-        <div className="kv-url">
-          <WcField as="s-text-field" label="Wishlist page address" value={pageUrl} {...flags({ readOnly: true })} details="Add this address to your store menu or a button. Customers need to be logged in to see their Wishlist." />
-          <s-button onClick={copy}>{copied ? "Copied" : "Copy"}</s-button>
-        </div>
       </>
     ),
   };
@@ -270,19 +251,13 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
       subtitle="Choose how the Wishlist looks and behaves on your storefront."
       actions={
         <>
-          {dirty ? <span className="kv-id">Unsaved changes</span> : null}
           <s-button href="/app/settings" onClick={backToSettings}>
             Back to Settings
-          </s-button>
-          <s-button onClick={discard} {...flags({ disabled: !dirty || saving })}>
-            Discard
-          </s-button>
-          <s-button variant="primary" onClick={save} {...flags({ disabled: !dirty || saving || invalid, loading: saving })}>
-            {saving ? "Saving…" : "Save"}
           </s-button>
         </>
       }
     >
+      <NativeSaveBar id="wishlist-settings-save-bar" open={dirty} saving={saving} canSave={!invalid} onSave={save} onDiscard={discard} />
       {blocker.state === "blocked" ? (
         <s-banner tone="warning" heading="You have unsaved changes">
           Leaving this page will discard them.

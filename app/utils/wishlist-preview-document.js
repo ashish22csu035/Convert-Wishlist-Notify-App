@@ -7,6 +7,7 @@
 // layout) is preview-only: it uses pv-* classes. Nothing here is fetched: products are invented, no script runs and
 // no link goes anywhere.
 import { THEME_ACCENT_FALLBACK, toSparse, wishlistIconSvg } from "./wishlist-appearance-shared.js";
+import { previewImagePosition, previewImageUrl } from "./preview-products.js";
 
 export const PREVIEW_VIEWPORTS = {
   desktop: { label: "Desktop", width: 960 }, // wider than the storefront's 860px table breakpoint, so the table layout shows
@@ -43,14 +44,14 @@ const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ "&": "&a
 
 // ---- sample catalogue (invented; the preview never reads a shop) --------------------------------------------------
 const PRODUCTS = [
-  { title: "Classic cotton tee", price: "$28.00", tone: 1, variant: "Large / White" },
-  { title: "Canvas market tote", price: "$34.00", tone: 2, variant: "" },
-  { title: "Stoneware mug", price: "$18.00", tone: 3, variant: "" },
-  { title: "Merino wool beanie", price: "$22.00", tone: 4, variant: "One size" },
-  { title: "Insulated trail bottle", price: "$26.00", tone: 5, variant: "" },
-  { title: "Relaxed linen shirt", price: "$64.00", tone: 6, variant: "Medium / Sand" },
-  { title: "Everyday crossbody bag", price: "$48.00", tone: 2, variant: "" },
-  { title: "Soft knit scarf", price: "$32.00", tone: 4, variant: "" },
+  { title: "Classic cotton tee", price: "$28.00", photo: "tee", variant: "Large / White" },
+  { title: "Canvas market tote", price: "$34.00", photo: "tote", variant: "" },
+  { title: "Stoneware mug", price: "$18.00", photo: "mug", variant: "" },
+  { title: "Merino wool beanie", price: "$22.00", photo: "beanie", variant: "One size" },
+  { title: "Insulated trail bottle", price: "$26.00", photo: "bottle", variant: "" },
+  { title: "Relaxed linen shirt", price: "$64.00", photo: "shirt", variant: "Medium / Sand" },
+  { title: "Everyday crossbody bag", price: "$48.00", photo: "crossbody", variant: "" },
+  { title: "Leather backpack", price: "$86.00", photo: "backpack", variant: "Burgundy" },
 ];
 const ICON = wishlistIconSvg();
 const heart = `<span class="kw-heart" aria-hidden="true">${ICON}</span>`;
@@ -67,13 +68,16 @@ function header() {
 </header>`;
 }
 
-const image = (tone, extra = "") => `<div class="pv-img pv-tone-${tone}${extra}"></div>`;
+// A product photo (public/preview-products, see utils/preview-products.js) in the storefront's image box. `zoom` makes a
+// detail view of the same photo for the product page's extra thumbnails (one sample photo per product).
+const image = (product, extra = "", zoom = "") =>
+  `<div class="pv-img${extra}"><img src="${previewImageUrl(product.photo)}" alt="" decoding="async" draggable="false" style="--pv-pos:${previewImagePosition(product.photo)};${zoom}"></div>`;
 
 // A product card as the storefront script builds it: the heart is a kw-btn--card button inside the card's image.
 function card(product, { state = "default", tag = "" } = {}) {
   const saved = state === "saved";
   return `<li class="pv-card kw-card-host">
-  <div class="pv-media">${image(product.tone)}<button type="button" class="kw-btn kw-btn--card${state === "hover" ? " kw-force-hover" : ""}" data-kw-button aria-pressed="${saved}" aria-label="${saved ? "Saved to wishlist" : "Add to wishlist"}: ${escapeHtml(product.title)}" tabindex="-1">${heart}</button></div>
+  <div class="pv-media">${image(product)}<button type="button" class="kw-btn kw-btn--card${state === "hover" ? " kw-force-hover" : ""}" data-kw-button aria-pressed="${saved}" aria-label="${saved ? "Saved to wishlist" : "Add to wishlist"}: ${escapeHtml(product.title)}" tabindex="-1">${heart}</button></div>
   <h3 class="pv-title">${escapeHtml(product.title)}</h3>
   <p class="pv-price">${escapeHtml(product.price)}</p>${tag ? `\n  <span class="pv-tag">${escapeHtml(tag)}</span>` : ""}
 </li>`;
@@ -93,12 +97,14 @@ ${cards}
 }
 
 function productPage() {
-  const thumbs = [1, 2, 3, 4].map((n) => `<div class="pv-thumb">${image(n === 1 ? 1 : n)}</div>`).join("");
+  const tee = PRODUCTS[0];
+  const views = ["", "transform:scale(1.35);transform-origin:50% 25%", "transform:scale(1.35);transform-origin:12% 65%", "transform:scale(1.35);transform-origin:88% 65%"]; // gentle crops: a plain white tee shows nothing when zoomed far in
+  const thumbs = views.map((zoom) => `<div class="pv-thumb">${image(tee, "", zoom)}</div>`).join("");
   return `${header()}
 <main class="pv-main">
   <p class="pv-crumbs">Home / Shop / Classic cotton tee</p>
   <div class="pv-product">
-    <div class="pv-gallery">${image(1, " pv-img--square")}<div class="pv-thumbs">${thumbs}</div></div>
+    <div class="pv-gallery">${image(PRODUCTS[0], " pv-img--square")}<div class="pv-thumbs">${thumbs}</div></div>
     <div class="pv-details">
       <p class="pv-vendor">Sample Store</p>
       <h1 class="pv-ptitle">Classic cotton tee</h1>
@@ -136,7 +142,7 @@ function wishlistRow(product, { stock }) {
   return `<tr class="kw-row">
   <td class="kw-td kw-td--select"><input class="kw-check" type="checkbox" aria-label="Select: ${escapeHtml(product.title)}" tabindex="-1"></td>
   <td class="kw-td kw-td--remove"><button type="button" class="kw-row__remove" aria-label="Remove from wishlist: ${escapeHtml(product.title)}" title="Remove from wishlist" tabindex="-1">×</button></td>
-  <td class="kw-td kw-td--image"><a class="kw-thumb" href="#" tabindex="-1" aria-label="${escapeHtml(product.title)}">${image(product.tone)}</a></td>
+  <td class="kw-td kw-td--image"><a class="kw-thumb" href="#" tabindex="-1" aria-label="${escapeHtml(product.title)}">${image(product)}</a></td>
   <td class="kw-td kw-td--name"><a class="kw-row__title" href="#" tabindex="-1">${escapeHtml(product.title)}</a><span class="kw-row__variant">${escapeHtml(product.variant)}</span></td>
   <td class="kw-td kw-td--price"><span class="kw-price">${escapeHtml(unit)}</span>${out ? '<div class="kw-line" hidden></div>' : `<div class="kw-line">Subtotal: ${escapeHtml(unit)}</div>`}</td>
   <td class="kw-td kw-td--stock"><span class="kw-stock kw-stock--${out ? "out" : "in"}">${out ? "Out of stock" : "In stock"}</span></td>
@@ -203,15 +209,9 @@ ul { list-style: none; }
 .pv-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 26px 20px; }
 .pv-card { position: relative; min-width: 0; }
 .pv-media { position: relative; }
-.pv-img { position: relative; width: 100%; aspect-ratio: 4 / 5; overflow: hidden; background: #ececec; }
-.pv-img::after { content: ""; position: absolute; left: 24%; right: 24%; top: 26%; bottom: 22%; background: rgba(255, 255, 255, .5); border-radius: 14px; }
+.pv-img { position: relative; width: 100%; aspect-ratio: 4 / 5; overflow: hidden; background: #f4f4f4; }
+.pv-img img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: var(--pv-pos, 50% 50%); }
 .pv-img--square { aspect-ratio: 1 / 1; }
-.pv-tone-1 { background: linear-gradient(160deg, #dfe8f5, #b9cbe6); }
-.pv-tone-2 { background: linear-gradient(160deg, #f3e3cf, #e3c7a3); }
-.pv-tone-3 { background: linear-gradient(160deg, #e5efe2, #bfd6b9); }
-.pv-tone-4 { background: linear-gradient(160deg, #f2dfe3, #e3bcc6); }
-.pv-tone-5 { background: linear-gradient(160deg, #e7e3f2, #c9c1e3); }
-.pv-tone-6 { background: linear-gradient(160deg, #f4ecd6, #e6d6a5); }
 .pv-title { margin-top: 10px; font-size: 15px; font-weight: 400; line-height: 1.3; }
 .pv-price { margin-top: 2px; color: #555; font-size: 14px; }
 .pv-tag { display: inline-block; margin-top: 6px; padding: 1px 8px; font: 600 11px/18px system-ui, sans-serif; color: #444; background: #f1f1f1; border-radius: 9px; }
@@ -220,7 +220,6 @@ ul { list-style: none; }
 .pv-crumbs { margin-bottom: 18px; font-size: 13px; color: #777; }
 .pv-product { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 44px; align-items: start; }
 .pv-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
-.pv-thumb .pv-img::after { display: none; }
 .pv-vendor { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: #777; }
 .pv-ptitle { margin: 4px 0 6px; font-size: 30px; line-height: 1.2; font-weight: 400; }
 .pv-pprice { font-size: 20px; }

@@ -175,9 +175,11 @@ html[data-kw-product-page-button-style='filled'] .kw-btn--product:hover {
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  /* 44px (the touch target) unless a larger icon needs a larger button. 22px icon + 22px = today's 44px. */
-  width: max(44px, calc(var(--kw-collection-page-icon-size, 22) * 1px + 22px));
-  height: max(44px, calc(var(--kw-collection-page-icon-size, 22) * 1px + 22px));
+  /* The setting sizes the WHOLE button: a circle twice the icon (the default 22px icon is the usual 44px button, and the
+     heart is always half the circle, so it stays centred and in proportion). A square box, so it can never go oval.
+     The visible circle may be under 44px for the smallest icons; its tap area is kept at 44px by ::after below. */
+  width: calc(var(--kw-collection-page-icon-size, 22) * 2px);
+  height: calc(var(--kw-collection-page-icon-size, 22) * 2px);
   padding: 0;
   margin: 0;
   background: rgba(255, 255, 255, calc(var(--kw-collection-page-background-opacity, 92) / 100));
@@ -186,6 +188,17 @@ html[data-kw-product-page-button-style='filled'] .kw-btn--product:hover {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Invisible touch target: at least 44 x 44px, centred on the circle, and the same size as the circle when that is larger. */
+.kw-btn--card::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
 }
 
 .kw-btn--card .kw-heart {
@@ -669,8 +682,16 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
   opacity: 0.7;
 }
 
-.kw-btn-cart--notify[disabled] {
+/* "You're on the list!" is a finished state, not a pending one. The rule above gives EVERY disabled action button the
+   progress cursor (on Windows an arrow with a blue spinning ring). These rules carry an extra class, so they win on
+   specificity and not merely by coming later in the file. */
+.kw-btn-cart.kw-btn-cart--notify[disabled]:not(.kw-btn-cart--disabled) {
   cursor: default;
+}
+
+/* A subscription request really in flight (runNotify sets aria-busy) keeps the progress cursor. */
+.kw-btn-cart.kw-btn-cart--notify[disabled][aria-busy="true"]:not(.kw-btn-cart--disabled) {
+  cursor: progress;
 }
 
 .kw-btn-cart--compact {
@@ -1103,4 +1124,24 @@ html[data-kw-wishlist-page-layout='grid'] .kw-table--select .kw-td--select {
 .kw-wishlist-off .kw-header-icon,
 .kw-wishlist-off [data-kw-button] {
   display: none !important;
+}
+
+/* Notify Me Settings > Button. The theme's own Add to cart button becomes the Notify Me button on a sold-out variant
+   ([data-kw-notify]); these rules only apply once the merchant chose a style or colour, and the same three looks are
+   drawn by the settings preview (notifyButtonStyle in notify-settings-shared.js). */
+html[data-kw-notify-style="filled"] [data-kw-notify] {
+  background: var(--kw-notify-bg, #111111) !important;
+  border-color: var(--kw-notify-bg, #111111) !important;
+  color: var(--kw-notify-text, #ffffff) !important;
+}
+html[data-kw-notify-style="outline"] [data-kw-notify] {
+  background: transparent !important;
+  border: 1px solid var(--kw-notify-bg, currentColor) !important;
+  color: var(--kw-notify-text, var(--kw-notify-bg, currentColor)) !important;
+}
+html:not([data-kw-notify-style])[data-kw-notify-bg] [data-kw-notify] {
+  background: var(--kw-notify-bg) !important;
+}
+html:not([data-kw-notify-style])[data-kw-notify-text] [data-kw-notify] {
+  color: var(--kw-notify-text) !important;
 }

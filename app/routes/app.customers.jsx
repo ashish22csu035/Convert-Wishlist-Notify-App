@@ -1,17 +1,19 @@
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { loadMerchantContext } from "../utils/merchant.server";
-import { cleanQuery, getCustomersReport, parseChoice } from "../models/reporting.server";
+import { getCustomersReport, parseChoice } from "../models/reporting.server";
+import { maskedCustomerEmails } from "../models/customer-emails.server";
 import { CUSTOMER_SORTS } from "../utils/dashboard-constants";
 import { describePeriod } from "../utils/period";
-import { Card, EmptyState, InfoPopover, MerchantErrorBoundary, NoShopState, Page, Pager, ParamSelect, SearchBox, formatDate, formatNumber } from "../components/merchant-ui";
+import { Card, CustomerLink, EmptyState, InfoPopover, MerchantErrorBoundary, NoShopState, Page, Pager, ParamSelect, formatDate, formatNumber } from "../components/merchant-ui";
 
 export const loader = async ({ request }) => {
-  const { shop, days, period, view, page, params } = await loadMerchantContext(request);
+  const { admin, shop, days, period, view, page, params } = await loadMerchantContext(request);
   if (!shop) return { days, period: view, page, report: null };
-  const q = cleanQuery(params.get("q"));
   const sort = parseChoice(params.get("sort"), CUSTOMER_SORTS, "recent");
-  return { days, period: view, page, q, sort, report: await getCustomersReport(shop.id, { days: period, q, sort, page }) };
+  const report = await getCustomersReport(shop.id, { days: period, sort, page });
+  const emails = await maskedCustomerEmails(admin, shop.id, report.customers.map((c) => c.customerId));
+  return { days, period: view, page, sort, report, emails };
 };
 
 // What the numbers on this screen mean, in one place behind the (i) button.
@@ -26,14 +28,14 @@ function CustomersInfo() {
           <strong>Activity</strong> counts Wishlist and Notify Me events inside the selected date range, in UTC.
         </li>
         <li>A customer can have activity even if they currently have no saved items.</li>
-        <li>Customers are identified by Shopify customer ID. Names and email addresses are not stored or shown in this view.</li>
+        <li>Customers are shown by a partly hidden email address (for example a*****@gmail.com) when Shopify provides one, otherwise by Shopify customer ID. Names are not shown, and the full address is never displayed.</li>
       </ul>
     </InfoPopover>
   );
 }
 
 export default function CustomersPage() {
-  const { period, page, report, q, sort } = useLoaderData();
+  const { period, page, report, sort, emails } = useLoaderData();
   const words = describePeriod(period);
   return (
     <Page title="Engaged customers" subtitle="Logged-in customers who use Wishlist or Notify Me." period={period} actions={<CustomersInfo />}>
@@ -52,15 +54,14 @@ export default function CustomersPage() {
             </div>
           </div>
           <Card flush>
-            <div className="kv-toolbar">
-              <SearchBox value={q} placeholder="Search by customer ID" />
+            <div className="kv-toolbar kv-toolbar--end">
               <div style={{ minWidth: 200 }}>
                 <ParamSelect label="Sort by" param="sort" value={sort} options={Object.entries(CUSTOMER_SORTS)} />
               </div>
             </div>
             {report.customers.length === 0 ? (
-              <EmptyState heading={q ? "No matching customers" : "No engaged customers yet"}>
-                {q ? "Search by the numeric customer ID shown in the table." : sort === "activity" ? `No customers had activity ${words.within}.` : "Customers appear here after they save a product or ask to be notified."}
+              <EmptyState heading="No engaged customers yet">
+                {sort === "activity" ? `No customers had activity ${words.within}.` : "Customers appear here after they save a product or ask to be notified."}
               </EmptyState>
             ) : (
               <s-table>
@@ -75,9 +76,7 @@ export default function CustomersPage() {
                   {report.customers.map((customer) => (
                     <s-table-row key={customer.customerId}>
                       <s-table-cell>
-                        <s-link href={`shopify://admin/customers/${customer.customerId}`}>
-                          <span className="kv-id">Customer {customer.customerId}</span>
-                        </s-link>
+                        <CustomerLink customerId={customer.customerId} emails={emails} />
                       </s-table-cell>
                       <s-table-cell>{formatNumber(customer.savedItems)}</s-table-cell>
                       <s-table-cell>{formatNumber(customer.activeSubscriptions)}</s-table-cell>
