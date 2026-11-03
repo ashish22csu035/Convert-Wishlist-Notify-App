@@ -1,5 +1,6 @@
 import { unauthenticated } from "../shopify.server";
 import { classifyAvailability } from "../utils/inventory.server";
+import { safeErrorSummary } from "../utils/storefront-auth.server";
 
 const VARIANT_QUERY = `#graphql
   query NotifyVariant($id: ID!) {
@@ -56,8 +57,19 @@ export class LookupError extends Error {
 // "Shopify could not be reached", with a throttle marked on it when that is the reason. The code and status stay the
 // same either way (callers and the storefront see no difference); `throttled` and `retryAfterMs` are for the
 // background paths that decide when to try again.
+//
+// Shopify's library THROWS when an Admin query comes back with GraphQL errors (a GraphqlQueryError carrying them in
+// body.errors.graphQLErrors); it does not return them. They are read here, from either shape, so the cause is not lost
+// behind the generic code: `graphqlCodes` (e.g. ["ACCESS_DENIED"]) and `accessDenied` let a caller tell "this app may not
+// read this data" from "Shopify is unreachable", and `detail` (URLs and long numbers removed) is for the server log only.
 function shopUnavailable(source) {
   const error = new LookupError("shop_unavailable", 503);
+  const graphQLErrors = Array.isArray(source) ? source : source?.body?.errors?.graphQLErrors;
+  if (Array.isArray(graphQLErrors) && graphQLErrors.length) {
+    error.graphqlCodes = [...new Set(graphQLErrors.map((item) => item?.extensions?.code).filter((code) => typeof code === "string"))].slice(0, 5);
+    error.accessDenied = error.graphqlCodes.includes("ACCESS_DENIED");
+  }
+  error.detail = safeErrorSummary(source).message || null;
   const throttle = throttleOf(source);
   if (throttle) {
     error.throttled = true;
@@ -238,7 +250,14 @@ export async function resolveStorefrontPurchasable({ admin, shopDomain, variant,
 }
 
 export async function fetchCustomerEmail(admin, customerGid) {
-  const json = await run(admin, CUSTOMER_QUERY, { id: customerGid });
+  let json;
+  try {
+    json = await run(admin, CUSTOMER_QUERY, { id: customerGid });
+  } catch (error) {
+    // Shopify refused the customer data itself (the app is not approved for it): not an outage, and retrying cannot help.
+    if (error instanceof LookupError && error.accessDenied) throw new LookupError("customer_data_unavailable", 403);
+    throw error;
+  }
   if (json.errors?.length) {
     const denied = json.errors.some((error) => error?.extensions?.code === "ACCESS_DENIED");
     throw denied ? new LookupError("customer_data_unavailable", 403) : shopUnavailable(json.errors);
