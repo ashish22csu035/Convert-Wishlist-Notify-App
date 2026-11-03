@@ -1,0 +1,51 @@
+# Server-only overrides (VPS). MySQL service, 500 MB memory cap per container, web on host port 3200
+# (3000 is taken by konvert-gist). nginx proxies konvert-notify-me.konvertapps.co -> 127.0.0.1:3200.
+services:
+  web:
+    ports: !override
+      - "127.0.0.1:3200:3000"
+    mem_limit: 500m
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    mem_limit: 500m
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  redis:
+    mem_limit: 500m
+
+  migrate:
+    mem_limit: 500m
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.0-debian
+    environment:
+      MYSQL_ROOT_PASSWORD: qwerty123456
+      MYSQL_DATABASE: konvert_wishlist_notify
+    command: ["--performance-schema=OFF", "--innodb-buffer-pool-size=128M", "--max-connections=100"]
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    mem_limit: 500m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  mysql-data:
