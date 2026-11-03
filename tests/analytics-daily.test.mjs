@@ -117,7 +117,7 @@ test("shops are isolated", async () => {
   assert.deepEqual([second.counts.WISHLIST_ADDED, second.wishlistSessions], [3, 1]);
 });
 
-test("a session that crosses midnight counts on each day it has events, and daily sessions do not add up to the period's", async () => {
+test("a session that crosses midnight counts once, on the day it started, and the days add up to the period's", async () => {
   const shop = await makeShop("midnight");
   const a = await actorOf(shop);
   const s = await session(shop, a, "WISHLIST", "2026-10-14T23:50:00Z");
@@ -125,24 +125,24 @@ test("a session that crosses midnight counts on each day it has events, and dail
   await event(shop, a, s, "WISHLIST_ADDED", "2026-10-15T00:00:01Z");
   const d14 = await daily.calculateAnalyticsDay(shop.id, "2026-10-14");
   const d15 = await daily.calculateAnalyticsDay(shop.id, "2026-10-15");
-  assert.deepEqual([d14.wishlistSessions, d15.wishlistSessions], [1, 1]);
-  assert.deepEqual([d14.counts.WISHLIST_ADDED, d15.counts.WISHLIST_ADDED], [1, 1]);
-  assert.deepEqual([d14.wishlistSessionsCarried, d15.wishlistSessionsCarried], [0, 1], "the 15th carries the session that began on the 14th");
-  assert.equal(d14.wishlistSessions + d15.wishlistSessions - d15.wishlistSessionsCarried, 1, "sessions - carried = range-wide distinct sessions");
+  assert.deepEqual([d14.wishlistSessions, d15.wishlistSessions], [1, 0], "it started on the 14th, so it is only there");
+  assert.deepEqual([d14.counts.WISHLIST_ADDED, d15.counts.WISHLIST_ADDED], [1, 1], "its events are still counted on the day they happened");
+  assert.deepEqual([d14.wishlistSessionsCarried, d15.wishlistSessionsCarried, d14.notifyMeSessionsCarried, d15.notifyMeSessionsCarried], [0, 0, 0, 0], "nothing needs carrying any more");
   const both = await reporting.getAnalytics(shop, P.customPeriod("2026-10-14", "2026-10-15", NOW).period, NOW);
-  assert.equal(both.sessionActivity.wishlist.current, 1, "the live period counts the session once");
+  assert.equal(both.sessionActivity.wishlist.current, d14.wishlistSessions + d15.wishlistSessions, "the days add up to the period");
   assert.equal(both.activity.window.WISHLIST_ADDED, d14.counts.WISHLIST_ADDED + d15.counts.WISHLIST_ADDED, "events are additive across days");
 });
 
-test("a day with events that carry no session has unavailable (null) sessions, like the live screen", async () => {
+test("events that carry no session do not make the session counts unavailable: sessions are counted from BrowsingSession", async () => {
   const shop = await makeShop("nosession");
   const a = await actorOf(shop);
   await event(shop, a, null, "WISHLIST_ADDED", "2026-10-05T08:00:00Z");
   await event(shop, a, null, "NOTIFY_SUBSCRIBED", "2026-10-05T09:00:00Z");
+  await session(shop, a, "NOTIFY_ME", "2026-10-05T10:00:00Z");
   const result = await daily.calculateAnalyticsDay(shop.id, "2026-10-05");
-  assert.deepEqual([result.wishlistSessions, result.notifyMeSessions, result.counts.WISHLIST_ADDED], [null, null, 1]);
+  assert.deepEqual([result.wishlistSessions, result.notifyMeSessions, result.counts.WISHLIST_ADDED], [0, 1, 1]);
   const liveDay = await live(shop, "2026-10-05");
-  assert.deepEqual([liveDay.sessionActivity.wishlist.current, liveDay.sessionActivity.notifyMe.current], [null, null]);
+  assert.deepEqual([liveDay.sessionActivity.wishlist.current, liveDay.sessionActivity.notifyMe.current], [0, 1]);
   assert.equal((await daily.calculateAnalyticsDay(shop.id, "2026-10-06")).wishlistSessions, 0, "a neighbouring day is not affected");
 });
 
@@ -173,9 +173,9 @@ test("parity: every day of a busy shop equals the live Analytics loader for that
   // events are additive over the period; sessions are not (some sessions span two days)
   const period = await reporting.getAnalytics(shop, P.customPeriod(dayOf(1), dayOf(13), NOW).period, NOW);
   for (const type of SIX) assert.equal(days.reduce((sum, row) => sum + row.counts[type], 0), period.activity.window[type], `${type} adds up`);
-  assert.ok(days.reduce((sum, row) => sum + row.wishlistSessions, 0) > period.sessionActivity.wishlist.current, "midnight-crossing sessions are counted on both days");
-  // ... but sessions minus the carried ones (every day except the first) is exactly the live range-wide distinct count
+  // a session has one start, so sessions add up over the period exactly like events do, and nothing is carried
   for (const [feature, sessions, carried] of [["wishlist", "wishlistSessions", "wishlistSessionsCarried"], ["notifyMe", "notifyMeSessions", "notifyMeSessionsCarried"]]) {
-    assert.equal(days.reduce((sum, row, i) => sum + row[sessions] - (i === 0 ? 0 : row[carried]), 0), period.sessionActivity[feature].current, `${feature}: range-wide distinct sessions`);
+    assert.equal(days.reduce((sum, row) => sum + row[sessions], 0), period.sessionActivity[feature].current, `${feature}: the days add up to the period`);
+    assert.ok(days.every((row) => row[carried] === 0), `${feature}: nothing is carried`);
   }
 });

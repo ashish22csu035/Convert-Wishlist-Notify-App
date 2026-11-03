@@ -10,5 +10,5 @@ export const SETTING_LIMITS = { senderName: 100, replyToEmail: 320, emailSubject
 export const WISHLIST_SORTS = { saves: "Most saved", recent: "Recently saved" };
 export const CUSTOMER_SORTS = { recent: "Recently active", saved: "Most saved items", activity: "Most activity" };
 export const SUBSCRIPTION_FILTERS = { all: "All", ACTIVE: "Waiting for restock", FULFILLED: "Email sent" };
-export const DELIVERY_FILTERS = { all: "All", PENDING: "Queued", SENDING: "Sending", SENT: "Sent", FAILED: "Failed", UNKNOWN: "Unknown", SKIPPED: "Skipped" };
+export const DELIVERY_FILTERS = { all: "All", PENDING: "Queued", SENT: "Sent" };
 export const WISHLIST_ACTIVITY_FILTERS = { all: "All activity", WISHLIST_ADDED: "Added", WISHLIST_REMOVED: "Removed", WISHLIST_PRODUCT_CLICKED: "Opened" };

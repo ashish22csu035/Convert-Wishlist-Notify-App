@@ -59,6 +59,7 @@ export const loader = async ({ request }) => {
     attribution,
     storeCurrency,
     total: list.total,
+    sentInRange: list.sentInRange,
     catalogAvailable: catalog.available,
     overview: { ...overview, requested: overview.requested.map(withItem), problems: overview.problems.map(withItem) },
     rows: list.rows.map(withItem),
@@ -96,7 +97,7 @@ function DeliveryTable({ rows, catalogAvailable, showEmailsSent = false }) {
     <s-table>
       <s-table-header-row>
         <s-table-header listSlot="primary">Item</s-table-header>
-        {showEmailsSent ? <s-table-header format="numeric">Emails Sent</s-table-header> : null}
+        {showEmailsSent ? <s-table-header format="numeric">Email count</s-table-header> : null}
         <s-table-header>Status</s-table-header>
         <s-table-header format="numeric">Restock cycle</s-table-header>
         <s-table-header format="numeric">Attempts</s-table-header>
@@ -109,7 +110,7 @@ function DeliveryTable({ rows, catalogAvailable, showEmailsSent = false }) {
             <s-table-cell>
               <ItemCell row={job} catalogAvailable={catalogAvailable} />
             </s-table-cell>
-            {showEmailsSent ? <s-table-cell>{formatNumber(job.emailsSent)}</s-table-cell> : null}
+            {showEmailsSent ? <s-table-cell>{formatNumber(job.emailCount)}</s-table-cell> : null}
             <s-table-cell>
               <StatusBadge status={job.status} />
             </s-table-cell>
@@ -140,7 +141,7 @@ export default function NotifyMePage() {
         <>
           <Grid>
             <KpiCard label="Active subscriptions" value={o.subscriptions.ACTIVE} icon="notification" tone="blue" note={`Current total · ${formatNumber(o.window.subscribed)} new ${words.within}`} hint="Customers who are waiting for a sold-out item right now. This is a current total; the note shows new sign-ups in the date range." />
-            <KpiCard label="Customers notified" value={o.subscriptions.FULFILLED} icon="check-circle" tone="blue" note="All time" hint="Subscriptions that have been completed because a restock email was accepted by the mail server. It counts subscriptions, not people, and not the date range." />
+            <KpiCard label="Customers notified" value={o.customersNotified} icon="check-circle" tone="blue" note="All time" hint="Distinct customer records (app-generated IDs) that have had at least one restock email accepted by the mail server. A customer with several subscriptions, restocks or emails counts once. It does not use the date range, and one person with more than one record would count more than once." />
             <KpiCard label="Emails sent" value={o.deliveries.SENT} icon="email" tone="blue" note={`All time · ${formatNumber(o.window.emailsSent)} ${words.within}`} hint="Emails accepted by the mail server. Accepted does not confirm they reached the inbox or were opened." />
             <KpiCard label="Queued or sending" value={o.deliveries.PENDING + o.deliveries.SENDING} icon="clock" tone="blue" note="Right now" hint="Emails waiting for the email worker, or being sent at this moment. Run the worker to send queued mail." />
             {revenueOption ? (
@@ -160,7 +161,7 @@ export default function NotifyMePage() {
                 </div>
               ) : null}
               <DeliveryTable rows={o.problems} catalogAvailable={data.catalogAvailable} />
-              <p className="kv-note">Showing the 10 most recent. Filter “Email activity” by Failed or Unknown for the full list.</p>
+              <p className="kv-note">Showing the 10 most recent.</p>
             </Card>
           ) : null}
 
@@ -172,20 +173,22 @@ export default function NotifyMePage() {
                 <ParamSelect label="Status" param="status" value={data.status} options={Object.entries(filters)} />
               </div>
             </div>
-            <ul className="kv-legend-list">
-              {Object.keys(filters)
-                .filter((key) => key !== "all")
-                .map((key) => (
-                  <li key={key}>
-                    <strong>{filters[key]}</strong>: {STATUS_HELP[key]}
-                  </li>
-                ))}
-            </ul>
-            <p className="kv-note" style={{ paddingTop: 8 }}>
-              {tab === "emails"
-                ? `Showing emails queued ${words.within} (UTC). “Sent” means accepted by the mail server, not confirmed delivered or opened. “Emails Sent” counts the sent emails for that item queued ${words.within}, whatever the status filter.`
-                : "Showing every subscription that is waiting or has had an email sent, newest first. This list is not limited by the date range. “Customers Waiting” is how many customers are waiting for that item right now. “Last email” is the result of the latest restock email for that subscription."}
-            </p>
+            {tab === "emails" ? null : (
+              <>
+                <ul className="kv-legend-list">
+                  {Object.keys(filters)
+                    .filter((key) => key !== "all")
+                    .map((key) => (
+                      <li key={key}>
+                        <strong>{filters[key]}</strong>: {STATUS_HELP[key]}
+                      </li>
+                    ))}
+                </ul>
+                <p className="kv-note" style={{ paddingTop: 8 }}>
+                  Showing every subscription that is waiting or has had an email sent, newest first. This list is not limited by the date range. “Customers Waiting” is how many customers are waiting for that item right now. “Last email” is the result of the latest restock email for that subscription.
+                </p>
+              </>
+            )}
             {data.rows.length === 0 ? (
               tab === "emails" ? (
                 <EmptyState heading="No emails">{data.status === "all" ? `No restock emails were queued ${words.within}. They are queued when an item customers are waiting for comes back in stock.` : "No emails in this period have this status."}</EmptyState>

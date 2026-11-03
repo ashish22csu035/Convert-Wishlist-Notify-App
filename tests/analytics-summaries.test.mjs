@@ -192,58 +192,52 @@ test("NOTIFY_UNSUBSCRIBED is represented: stored, summed and equal to the live c
   assert.deepEqual(Object.keys(got.activity.window), reporting.ACTIVITY_TYPES);
 });
 
-test("sessions are exact range-wide distinct counts, not the sum of the days", async () => {
+test("sessions are the sessions that started in the range: the days simply add up and equal the live count", async () => {
   const shop = await seedShop("sessions");
   await fill(shop);
-  const period = range(day(13), day(16)); // the session over midnight 14 -> 15 is in two daily rows
+  const period = range(day(13), day(16)); // the session over midnight 14 -> 15 started on the 14th and is in one daily row only
   const stored = await prisma.analyticsDaily.findMany({ where: { shopId: shop.id, day: { gte: at(`${day(13)}T00:00:00Z`), lte: at(`${day(16)}T00:00:00Z`) } } });
-  const naive = stored.reduce((total, row) => total + row.wishlistSessions, 0);
+  const sum = stored.reduce((total, row) => total + row.wishlistSessions, 0);
   const live = await reference(shop, period);
-  assert.ok(naive > live.sessionActivity.wishlist.current, "the daily rows add up to more than the distinct sessions");
+  assert.equal(sum, live.sessionActivity.wishlist.current, "the daily rows add up to exactly the live count");
+  assert.ok(stored.every((row) => row.wishlistSessionsCarried === 0 && row.notifyMeSessionsCarried === 0), "nothing is carried");
   assert.equal((await overview(shop, period)).sessionActivity.wishlist.current, live.sessionActivity.wishlist.current);
-  // a range that starts on the 15th neither counts the session that began on the 14th twice nor drops it
   const fromFifteenth = range(day(15), day(16));
   assert.equal((await overview(shop, fromFifteenth)).sessionActivity.wishlist.current, (await reference(shop, fromFifteenth)).sessionActivity.wishlist.current);
-  // a day with events that carry no session is left out of the figure (its NULL is not read as zero or as activity); the other days still show
+  // an event that carries no session changes no session count: sessions come from BrowsingSession
   const actor = await actorOf(shop);
   const recent = range(day(18), day(21));
-  const beforeNull = (await overview(shop, recent)).sessionActivity.wishlist.current;
-  assert.notEqual(beforeNull, null);
-  await event(shop, actor, null, "WISHLIST_ADDED", "2026-10-20T20:00:00Z"); // inside the recent window: picked up by the worker
+  const before = (await overview(shop, recent)).sessionActivity.wishlist.current;
+  assert.notEqual(before, null);
+  await event(shop, actor, null, "WISHLIST_ADDED", "2026-10-20T20:00:00Z");
   await fill(shop, { now: () => new Date(NOW.getTime() + 3 * 60 * 60 * 1000) });
   const day20 = await prisma.analyticsDaily.findFirst({ where: { shopId: shop.id, day: at(`${day(20)}T00:00:00Z`) } });
-  assert.equal(day20.wishlistSessions, null);
-  assert.equal((await overview(shop, recent)).sessionActivity.wishlist.current, beforeNull - 1, "the other days still count");
-  assert.notEqual((await overview(shop, period)).sessionActivity.wishlist.current, null, "other ranges are unaffected");
+  assert.notEqual(day20.wishlistSessions, null);
+  assert.equal((await overview(shop, recent)).sessionActivity.wishlist.current, before, "the sessions are unchanged");
 });
 
-test("sessions from stored rows: partial ranges, NULL values, range edges and the midnight overlap, all without events", async () => {
+test("sessions from stored rows: partial ranges, NULL values and range edges", async () => {
   const shop = await seedShop("sess-rows");
   await fill(shop);
   const rowsIn = (a, b) => prisma.analyticsDaily.findMany({ where: { shopId: shop.id, day: { gte: at(`${day(a)}T00:00:00Z`), lte: at(`${day(b)}T00:00:00Z`) } } });
+  const total = (rows) => rows.reduce((t, r) => t + r.wishlistSessions, 0);
   // only days 12..16 hold rows inside 10..20; the rest are deleted
   await prisma.analyticsDaily.deleteMany({ where: { shopId: shop.id, OR: [{ day: { lt: at(`${day(12)}T00:00:00Z`) } }, { day: { gt: at(`${day(16)}T00:00:00Z`) } }] } });
   const kept = await rowsIn(12, 16);
   const period = range(day(10), day(20));
   const got = await overview(shop, period);
   assert.equal(got.coverage.complete, false);
-  // 14 -> 15 is a session over midnight counted in both rows: once is subtracted; nothing outside 10..20 or outside the rows leaks in
-  const carried15 = kept.find((r) => r.day.getUTCDate() === 15).wishlistSessionsCarried;
-  assert.equal(carried15, 1);
-  assert.equal(got.sessionActivity.wishlist.current, kept.reduce((t, r) => t + r.wishlistSessions, 0) - kept.slice(1).reduce((t, r) => t + r.wishlistSessionsCarried, 0));
-  // a range starting on day 15 does not subtract the carry from day 14, which it does not contain
+  assert.equal(got.sessionActivity.wishlist.current, total(kept), "the days that exist are added up; nothing outside them leaks in");
   const fromFifteen = await overview(shop, range(day(15), day(20)));
-  const r15 = kept.filter((r) => r.day.getUTCDate() >= 15);
-  assert.equal(fromFifteen.sessionActivity.wishlist.current, r15.reduce((t, r) => t + r.wishlistSessions, 0) - r15.slice(1).reduce((t, r) => t + r.wishlistSessionsCarried, 0));
+  assert.equal(fromFifteen.sessionActivity.wishlist.current, total(kept.filter((r) => r.day.getUTCDate() >= 15)));
   // an edited value shows up exactly once, in the range holding its day only
   await bump(shop, 13, { wishlistSessions: { increment: 1000 } });
   assert.equal((await overview(shop, period)).sessionActivity.wishlist.current, got.sessionActivity.wishlist.current + 1000);
-  const r14 = kept.filter((r) => r.day.getUTCDate() >= 14);
-  assert.equal((await overview(shop, range(day(14), day(20)))).sessionActivity.wishlist.current, r14.reduce((t, r) => t + r.wishlistSessions, 0) - r14.slice(1).reduce((t, r) => t + r.wishlistSessionsCarried, 0), "the 1000 added on day 13 is not in a range that starts on 14");
+  assert.equal((await overview(shop, range(day(14), day(20)))).sessionActivity.wishlist.current, total(kept.filter((r) => r.day.getUTCDate() >= 14)), "the 1000 added on day 13 is not in a range that starts on day 14");
   // NULL sessions are not activity: those rows are skipped, and with none usable the figure is unavailable
   await bump(shop, 13, { wishlistSessions: null, wishlistSessionsCarried: null });
   const d13 = kept.find((r) => r.day.getUTCDate() === 13);
-  assert.equal((await overview(shop, period)).sessionActivity.wishlist.current, got.sessionActivity.wishlist.current - (d13.wishlistSessions - d13.wishlistSessionsCarried));
+  assert.equal((await overview(shop, period)).sessionActivity.wishlist.current, got.sessionActivity.wishlist.current - d13.wishlistSessions);
   await prisma.analyticsDaily.updateMany({ where: { shopId: shop.id }, data: { wishlistSessions: null, wishlistSessionsCarried: null, notifyMeSessions: null, notifyMeSessionsCarried: null } });
   const unusable = await overview(shop, period);
   assert.deepEqual([unusable.sessionActivity.wishlist.current, unusable.sessionActivity.notifyMe.current], [null, null]);

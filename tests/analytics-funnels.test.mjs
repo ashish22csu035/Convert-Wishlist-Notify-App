@@ -213,29 +213,30 @@ test("sessions: each session counts once per feature however many events it hold
   const ref = await reporting.getShopByDomain(shop.domain);
   const analytics = await reporting.getAnalytics(ref, range("2026-10-02", "2026-10-03"), NOW);
   assert.equal(analytics.sessionActivity.wishlist.current, 3, "3 sessions: 6 events and 2 customers collapse to sessions");
-  assert.equal(analytics.sessionActivity.notifyMe.current, 1, "one session with two sign-ups; emails and unsubscribes are not sessions; an idle session has no event");
+  assert.equal(analytics.sessionActivity.notifyMe.current, 2, "one session with two sign-ups and one idle session that only opened the form; emails and unsubscribes are not sessions");
   const w = analytics.activity.window;
   assert.equal(w.WISHLIST_ADDED + w.WISHLIST_PRODUCT_CLICKED + w.WISHLIST_REMOVED, 6);
 });
 
-test("sessions: the date range decides by when the activity happened, and a session is counted once even when it spans the edge", async () => {
+test("sessions: the date range decides by when the session started, and a session is counted once even when its events span the edge", async () => {
   const shop = await makeShop("sessrange");
   const a = await actorOf(shop);
   const early = await session(shop, a, "WISHLIST", "2026-10-01T23:50:00Z");
-  await sessionEvent(shop, a, early, "WISHLIST_ADDED", "2026-10-01T23:59:59Z"); // out
-  await sessionEvent(shop, a, early, "WISHLIST_ADDED", "2026-10-02T00:00:00Z"); // in: the session counts once for this range
+  await sessionEvent(shop, a, early, "WISHLIST_ADDED", "2026-10-01T23:59:59Z");
+  await sessionEvent(shop, a, early, "WISHLIST_ADDED", "2026-10-02T00:00:00Z"); // after midnight: still the session that started on the 1st
   const late = await session(shop, a, "WISHLIST", "2026-10-03T23:50:00Z");
-  await sessionEvent(shop, a, late, "WISHLIST_ADDED", "2026-10-03T23:59:59Z"); // in
-  await sessionEvent(shop, a, late, "WISHLIST_ADDED", "2026-10-04T00:00:00Z"); // out
+  await sessionEvent(shop, a, late, "WISHLIST_ADDED", "2026-10-03T23:59:59Z");
+  await sessionEvent(shop, a, late, "WISHLIST_ADDED", "2026-10-04T00:00:00Z");
   const onlyOutside = await session(shop, a, "WISHLIST", "2026-10-05T10:00:00Z");
   await sessionEvent(shop, a, onlyOutside, "WISHLIST_ADDED", "2026-10-05T10:01:00Z");
-  const count = (period) => reporting.sessionsWithActivity(shop.id, "WISHLIST", period.since, period.until);
-  assert.equal(await count(range("2026-10-02", "2026-10-03")), 2);
+  await session(shop, a, "WISHLIST", "2026-10-03T10:00:00Z"); // no event at all: still a session
+  const count = (period) => reporting.sessionCountOf(shop.id, "WISHLIST", period.since, period.until);
+  assert.equal(await count(range("2026-10-02", "2026-10-03")), 2, "the idle one and `late`; `early` started on the 1st");
   assert.equal(await count(range("2026-10-01", "2026-10-01")), 1);
-  assert.equal(await count(range("2026-10-04", "2026-10-04")), 1);
-  assert.equal(await count(range("2026-10-06", "2026-10-07")), 0, "a period with no activity is a confirmed zero");
-  assert.equal(await count(P.presetPeriod(30, NOW)), 3, "a preset runs to now; each session once");
-  assert.equal(await reporting.sessionsWithActivity(shop.id, "NOTIFY_ME", P.presetPeriod(30, NOW).since, null), 0, "the other feature has none");
+  assert.equal(await count(range("2026-10-04", "2026-10-04")), 0, "`late` started on the 3rd, so the 4th has nothing");
+  assert.equal(await count(range("2026-10-06", "2026-10-07")), 0, "a period with no sessions is a confirmed zero");
+  assert.equal(await count(P.presetPeriod(30, NOW)), 4, "a preset runs to now; each session once");
+  assert.equal(await reporting.sessionCountOf(shop.id, "NOTIFY_ME", P.presetPeriod(30, NOW).since, null), 0, "the other feature has none");
 });
 
 test("sessions: the previous period of the same length is counted for the comparison", async () => {
@@ -251,18 +252,17 @@ test("sessions: the previous period of the same length is counted for the compar
   assert.deepEqual(analytics.sessionActivity.wishlist, { current: 2, previous: 1 }, "Oct 6-7 has two sessions; the two days before (Oct 4-5) have one");
 });
 
-test("sessions: events that carry no session make the count unavailable, never a guess; events outside the range do not", async () => {
+test("sessions: events that carry no session do not make the count unavailable: sessions come from BrowsingSession", async () => {
   const shop = await makeShop("sessna");
   const a = await actorOf(shop);
   const s1 = await session(shop, a, "WISHLIST", "2026-10-02T10:00:00Z");
   await sessionEvent(shop, a, s1, "WISHLIST_ADDED", "2026-10-02T10:01:00Z");
   await sessionEvent(shop, a, null, "WISHLIST_ADDED", "2026-10-03T10:00:00Z"); // recorded before sessions existed
   const ref = await reporting.getShopByDomain(shop.domain);
-  const bad = await reporting.getAnalytics(ref, range("2026-10-02", "2026-10-03"), NOW);
-  assert.equal(bad.sessionActivity.wishlist.current, null, "cannot be attributed reliably: unavailable");
-  assert.equal(bad.sessionActivity.notifyMe.current, 0, "the other feature is unaffected and a real zero");
-  const clean = await reporting.getAnalytics(ref, range("2026-10-02", "2026-10-02"), NOW);
-  assert.equal(clean.sessionActivity.wishlist.current, 1, "the unattributed event is outside this range");
+  const both = await reporting.getAnalytics(ref, range("2026-10-02", "2026-10-03"), NOW);
+  assert.equal(both.sessionActivity.wishlist.current, 1, "the session-less event is not a session");
+  assert.equal(both.sessionActivity.notifyMe.current, 0, "the other feature is a real zero");
+  assert.equal((await reporting.getAnalytics(ref, range("2026-10-02", "2026-10-02"), NOW)).sessionActivity.wishlist.current, 1);
 });
 
 test("no stage carries helper text, in either funnel and whatever the data", async () => {
@@ -368,35 +368,25 @@ test("lightweight loader: the same figures as getAnalytics, for presets and cust
   assert.deepEqual([notComparable.comparable, notComparable.activity.previous, notComparable.sessionActivity.wishlist.previous, notComparable.sessionActivity.notifyMe.previous], [false, null, null, null]);
 });
 
-test("lightweight loader: a session that crosses midnight counts once, and a day whose events carry no session is left out instead of hiding the figure", async () => {
+test("lightweight loader: the stored session totals equal the live count for every period, even when some events carry no session", async () => {
   const shop = await seedBusyShop("slim-c", "2026-01-01T00:00:00Z", { unattributed: true });
   const ref = await reporting.getShopByDomain(shop.domain);
-  let nulls = 0;
-  let numbers = 0;
+  let compared = 0;
   for (const period of PARITY_PERIODS()) {
     const slim = await reporting.getAnalyticsOverview(ref, period, NOW);
     const live = await reporting.getAnalytics(ref, period, NOW);
     const label = typeof period === "number" ? `${period} days` : `${period.from}..${period.to}`;
     assert.deepEqual({ ...SLIM_FIELDS(slim), sessionActivity: null }, { ...SLIM_FIELDS(live), sessionActivity: null }, label);
-    // Sessions: where the live loader can give an exact figure the stored days give the same one. Where it says "unavailable"
-    // (a day holds events with no session) the stored days count the other days, so the figure is a lower bound, never higher.
     for (const feature of ["wishlist", "notifyMe"]) {
       for (const key of ["current", "previous"]) {
-        const got = slim.sessionActivity[feature][key];
-        const want = live.sessionActivity[feature][key];
-        if (want === null) {
-          nulls += 1;
-          assert.ok(got === null || got >= 0, `${label} ${feature}.${key}`);
-        } else if (got !== null) {
-          numbers += 1;
-          assert.ok(got <= want, `${label} ${feature}.${key}: ${got} stored vs ${want} live`);
-        }
+        assert.equal(slim.sessionActivity[feature][key], live.sessionActivity[feature][key], `${label} ${feature}.${key}`);
+        compared += 1;
       }
     }
   }
-  assert.ok(nulls > 0 && numbers > 0, `both unavailable (${nulls}) and real (${numbers}) session figures were compared`);
-  const w = (await reporting.getAnalyticsOverview(ref, range("2026-10-15", "2026-10-15"), NOW)).sessionActivity.wishlist;
-  assert.equal(w.current, 2, "Oct 15: the regular session and the one that began on Oct 14 (an event of it falls on Oct 15)");
+  assert.ok(compared > 0);
+  const day15 = await reporting.getAnalyticsOverview(ref, range("2026-10-15", "2026-10-15"), NOW);
+  assert.equal(day15.sessionActivity.wishlist.current, await reporting.sessionCountOf(ref.id, "WISHLIST", new Date("2026-10-15T00:00:00Z"), new Date("2026-10-16T00:00:00Z")), "Oct 15: the sessions that started that day");
   const both = (await reporting.getAnalyticsOverview(ref, range("2026-10-14", "2026-10-15"), NOW)).sessionActivity.wishlist.current;
   assert.equal(both, (await reporting.getAnalytics(ref, range("2026-10-14", "2026-10-15"), NOW)).sessionActivity.wishlist.current);
 });

@@ -847,7 +847,7 @@ test("Dashboard: the KPI row, the revenue card without its long copy, and the ac
   assert.equal(source.includes("footnote="), false, "no long copy on the revenue card");
   assert.match(source, /<ActivitySwitch series={d\.series} rangeLabel={words\.label} \/>/);
   assert.equal(/ActivityChart/.test(source), false);
-  for (const label of ["Unique Wishlist users", "Wishlist sessions", "Active Notify Me subscriptions", "Restock emails sent", "Attributed revenue"]) assert.ok(source.includes(`label="${label}"`), label);
+  for (const label of ["Unique Wishlist users", "Total sessions", "Active Notify Me subscriptions", "Restock emails sent", "Attributed revenue"]) assert.ok(source.includes(`label="${label}"`), label);
   assert.ok(source.includes('label="Wishlist items"'));
   assert.ok(source.includes("WISHLIST_ITEM_MODES"), "the Active/All-time selector is kept");
 });

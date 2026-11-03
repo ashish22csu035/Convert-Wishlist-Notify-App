@@ -1,4 +1,4 @@
-// Tests for the Notify Me tables: Customers Waiting, Emails Sent, the new status labels and the removed Unsubscribed option.
+// Tests for the Notify Me tables: Customers Waiting, Email count, the new status labels and the removed Unsubscribed option.
 //
 // Run: node --test tests/notify-me-tables.test.mjs
 //
@@ -82,45 +82,155 @@ test("Unsubscribed subscriptions are not listed or counted on the page, but stay
   assert.equal(await prisma.notifySubscription.count({ where: { id: gone.id, status: "UNSUBSCRIBED" } }), 1);
 });
 
-test("Emails Sent counts only SENT deliveries per variant inside the date range, whatever the status filter", async () => {
+test("Email count is 1 per SENT delivery and 0 otherwise; product-level totals are never repeated on rows", async () => {
   const shop = await makeShop("sent");
   const a1 = await makeSub(shop, 10);
   const a2 = await makeSub(shop, 10);
   const b = await makeSub(shop, 11);
   const c = await makeSub(shop, 12);
   await makeMail(a1, 1, "SENT", 1);
-  await makeMail(a1, 2, "SENT", 2); // a second restock cycle for the same subscription counts as a second email
-  await makeMail(a2, 1, "SENT", 3);
+  await makeMail(a1, 2, "SENT", 2); // a second restock cycle for the same subscription is a second email
+  await makeMail(a2, 1, "SENT", 10); // outside 7 days
   await makeMail(a2, 2, "SENT", 60); // outside 30 days
   for (const [i, status] of ["PENDING", "SENDING", "FAILED", "UNKNOWN", "SKIPPED"].entries()) await makeMail(a2, 10 + i, status, 1);
   await makeMail(b, 1, "FAILED", 1);
   await makeMail(c, 1, "SENT", 1);
 
   const all = await reporting.getDeliveries(shop.id, { days: 30 });
-  const sentFor = (rows, variant) => [...new Set(rows.filter((r) => r.variantGid.endsWith(`/${variant}`)).map((r) => r.emailsSent))];
-  assert.deepEqual(sentFor(all.rows, 10), [3], "3 sent in the window; the 60-day-old one and the other statuses are not counted");
-  assert.deepEqual(sentFor(all.rows, 11), [0], "zero is a real number");
-  assert.deepEqual(sentFor(all.rows, 12), [1], "variants are separate");
+  assert.equal(all.total, 10);
+  assert.ok(all.rows.every((r) => r.emailCount === (r.status === "SENT" ? 1 : 0)), "1 for SENT, 0 for every other status");
+  assert.ok(all.rows.every((r) => !("emailsSent" in r)), "no per-item total is attached to rows");
+  const variant10 = all.rows.filter((r) => r.variantGid.endsWith("/10") && r.status === "SENT");
+  assert.deepEqual(variant10.map((r) => r.emailCount), [1, 1, 1], "three sent emails for one variant: three rows of 1, not 3 three times");
+  assert.equal(all.sentInRange, 4);
+  assert.equal(all.rows.reduce((sum, r) => sum + r.emailCount, 0), all.sentInRange, "the column adds up to the total");
 
   const failedOnly = await reporting.getDeliveries(shop.id, { days: 30, status: "FAILED" });
-  assert.deepEqual(sentFor(failedOnly.rows, 10), [3], "a Failed filter still shows the product's sent count");
   assert.equal(failedOnly.total, 2);
+  assert.ok(failedOnly.rows.every((r) => r.emailCount === 0), "failed rows are not successful emails");
+  assert.equal(failedOnly.sentInRange, 4, "the status filter does not inflate or shrink the total");
+  const sentOnly = await reporting.getDeliveries(shop.id, { days: 30, status: "SENT" });
+  assert.equal(sentOnly.rows.reduce((sum, r) => sum + r.emailCount, 0), 4);
 
-  const wide = await reporting.getDeliveries(shop.id, { days: 90 });
-  assert.deepEqual(sentFor(wide.rows, 10), [4], "the count follows the page's date range");
-  assert.deepEqual(sentFor((await reporting.getDeliveries(shop.id, { days: 7 })).rows, 10), [3]);
-  assert.equal(all.total, 10,"the row total is unchanged by the new count");
+  assert.equal((await reporting.getDeliveries(shop.id, { days: 90 })).sentInRange, 5, "the total follows the date range");
+  assert.equal((await reporting.getDeliveries(shop.id, { days: 7 })).sentInRange, 3);
 });
 
-test("pagination still works with the new counts", async () => {
+test("pagination keeps the overall total: fifteen sent deliveries add up to 15 across pages", async () => {
   const shop = await makeShop("page");
   const sub = await makeSub(shop, 20);
-  for (let i = 1; i <= 30; i += 1) await makeMail(sub, i, i <= 3 ? "SENT" : "FAILED", 1);
+  for (let i = 1; i <= 30; i += 1) await makeMail(sub, i, i <= 15 ? "SENT" : "FAILED", 1);
   const page1 = await reporting.getDeliveries(shop.id, { days: 30, page: 1 });
   const page2 = await reporting.getDeliveries(shop.id, { days: 30, page: 2 });
   assert.equal(page1.total, 30);
   assert.ok(page1.rows.length > 0 && page2.rows.length > 0);
-  assert.ok([...page1.rows, ...page2.rows].every((r) => r.emailsSent === 3));
+  assert.equal(page1.sentInRange, 15, "page 1 reports the whole-range total");
+  assert.equal(page2.sentInRange, 15, "so does page 2");
+  const ids = new Set([...page1.rows, ...page2.rows].map((r) => r.id));
+  assert.equal(ids.size, page1.rows.length + page2.rows.length, "no delivery appears on two pages");
+  const rest = await reporting.getDeliveries(shop.id, { days: 30, page: 3 });
+  const sum = [...page1.rows, ...page2.rows, ...rest.rows].reduce((total, r) => total + r.emailCount, 0);
+  assert.equal(sum, 15, "the Email count column across all pages adds up to the total");
+});
+
+const makeActor = (shop) => prisma.actor.create({ data: { shopId: shop.id, customerGid: `gid://shopify/Customer/${(seq += 1)}` } });
+const subFor = (shop, actor, variant, status = "FULFILLED") =>
+  prisma.notifySubscription.create({
+    data: { shopId: shop.id, actorId: actor.id, productGid: `gid://shopify/Product/${variant}`, variantGid: `gid://shopify/ProductVariant/${variant}`, email: "x@example.invalid", status, consentedAt: new Date(), consentSource: "test" },
+  });
+
+test("Customers notified counts distinct Actors with a SENT email: many products, cycles and deliveries are one customer", async () => {
+  const shop = await makeShop("notified");
+  const other = await makeShop("notified-other");
+  const a = await makeActor(shop);
+  const b = await makeActor(shop);
+  const failedOnly = await makeActor(shop);
+  const pendingOnly = await makeActor(shop);
+  const a1 = await subFor(shop, a, 30);
+  const a2 = await subFor(shop, a, 31);
+  await makeMail(a1, 1, "SENT");
+  await makeMail(a1, 2, "SENT"); // a second restock cycle, same Actor
+  await makeMail(a2, 1, "SENT"); // a second product, same Actor
+  await makeMail(await subFor(shop, b, 30), 1, "SENT"); // a different Actor counts separately
+  for (const [actor, status] of [[failedOnly, "FAILED"], [pendingOnly, "PENDING"]]) await makeMail(await subFor(shop, actor, 32, "ACTIVE"), 1, status);
+  for (const [i, status] of ["SENDING", "UNKNOWN", "SKIPPED"].entries()) await makeMail(a1, 10 + i, status);
+  const stranger = await makeActor(other);
+  await makeMail(await subFor(other, stranger, 30), 1, "SENT"); // another shop's customer
+
+  assert.equal(await reporting.notifiedCustomerCount(shop.id), 2, "a and b only");
+  assert.equal(await reporting.notifiedCustomerCount(other.id), 1);
+  const overview = await reporting.getNotifyOverview(shop.id, 30);
+  assert.equal(overview.customersNotified, 2);
+  assert.equal(overview.subscriptions.FULFILLED, 3, "the old figure counted subscriptions, which is not the same thing");
+  assert.equal(overview.deliveries.SENT, 4, "Emails sent is one per successful delivery, not per customer");
+});
+
+test("Customers notified ignores the date range (all time)", async () => {
+  const shop = await makeShop("notified-old");
+  const actor = await makeActor(shop);
+  await makeMail(await subFor(shop, actor, 40), 1, "SENT", 400);
+  assert.equal((await reporting.getNotifyOverview(shop.id, 7)).customersNotified, 1);
+});
+
+test("Emails sent counts each successful delivery once, and duplicate attempts cannot add a second one", async () => {
+  const shop = await makeShop("dedupe");
+  const sub = await subFor(shop, await makeActor(shop), 50);
+  await makeMail(sub, 1, "SENT");
+  await assert.rejects(makeMail(sub, 1, "SENT"), "UNIQUE(subscriptionId, restockCycle) rejects a duplicate delivery");
+  await makeMail(sub, 2, "FAILED");
+  const overview = await reporting.getNotifyOverview(shop.id, 30);
+  assert.equal(overview.deliveries.SENT, 1);
+  assert.equal(overview.deliveries.FAILED, 1);
+});
+
+test("the KPI and the Email activity table reconcile: the Email count column adds up to sentInRange, and all time matches the KPI", async () => {
+  const shop = await makeShop("reconcile");
+  const other = await makeShop("reconcile-other");
+  const actor = await makeActor(shop);
+  const s1 = await subFor(shop, actor, 60);
+  const s2 = await subFor(shop, await makeActor(shop), 60);
+  const s3 = await subFor(shop, actor, 61);
+  await makeMail(s1, 1, "SENT");
+  await makeMail(s1, 2, "SENT");
+  await makeMail(s2, 1, "SENT");
+  await makeMail(s3, 1, "SENT");
+  await makeMail(s3, 2, "FAILED");
+  await makeMail(s3, 3, "SENT", 60); // outside 30 days, inside all time
+  await makeMail(await subFor(other, await makeActor(other), 60), 1, "SENT"); // other shop
+
+  const overview = await reporting.getNotifyOverview(shop.id, 30);
+  const table = await reporting.getDeliveries(shop.id, { days: 30 });
+  assert.equal(overview.deliveries.SENT, 5, "all time");
+  assert.equal(table.sentInRange, 4, "within 30 days");
+  assert.equal(table.sentInRange, table.rows.filter((r) => r.status === "SENT").length, "one SENT row per successful delivery");
+  assert.equal((await reporting.getDeliveries(shop.id, { days: 30, status: "FAILED" })).sentInRange, 4, "the status filter does not change the total");
+  assert.equal(table.rows.reduce((sum, r) => sum + r.emailCount, 0), table.sentInRange, "the Email count column adds up to the total");
+  assert.equal((await reporting.getDeliveries(shop.id, { days: 90 })).sentInRange, overview.deliveries.SENT);
+});
+
+test("the Email activity filter offers only All, Queued and Sent, and the status paragraphs are gone from that tab", () => {
+  assert.deepEqual(constants.DELIVERY_FILTERS, { all: "All", PENDING: "Queued", SENT: "Sent" });
+  const page = fs.readFileSync("app/routes/app.notify-me.jsx", "utf8");
+  assert.match(page, /<s-table-header format="numeric">Email count<\/s-table-header>/);
+  assert.match(page, /tab === "emails" \? null : \(/, "the legend and the long note are shown on the Subscriptions tab only");
+  assert.equal(/Each row represents|Add the Email count column|Showing emails queued|this item|Emails Sent/.test(page), false, "the Email activity explanations are removed");
+  assert.match(page, /o\.customersNotified/);
+});
+
+test("filtering by Queued or Sent returns only those records, All returns every record, and totals are unchanged", async () => {
+  const shop = await makeShop("filters");
+  const sub = await makeSub(shop, 70);
+  const statuses = ["PENDING", "PENDING", "SENDING", "SENT", "SENT", "SENT", "FAILED", "UNKNOWN", "SKIPPED"];
+  for (const [i, status] of statuses.entries()) await makeMail(sub, i + 1, status, 1);
+  const all = await reporting.getDeliveries(shop.id, { days: 30, status: "all" });
+  const queued = await reporting.getDeliveries(shop.id, { days: 30, status: "PENDING" });
+  const sent = await reporting.getDeliveries(shop.id, { days: 30, status: "SENT" });
+  assert.equal(all.total, 9, "All still lists failed, unknown, skipped and sending records");
+  assert.deepEqual([queued.total, queued.rows.every((r) => r.status === "PENDING")], [2, true]);
+  assert.deepEqual([sent.total, sent.rows.every((r) => r.status === "SENT")], [3, true]);
+  assert.deepEqual([all.sentInRange, queued.sentInRange, sent.sentInRange], [3, 3, 3]);
+  assert.equal(all.rows.reduce((n, r) => n + r.emailCount, 0), 3);
+  assert.equal(await prisma.emailDelivery.count({ where: { shopId: shop.id } }), 9, "no record was changed or hidden in the database");
 });
 
 test("labels: Waiting for restock / Email sent, no Unsubscribed option or explanation, mail-server wording kept", () => {
@@ -135,9 +245,9 @@ test("labels: Waiting for restock / Email sent, no Unsubscribed option or explan
   assert.match(ui, /ACTIVE: \["info", "Waiting for restock"\]/);
   assert.match(ui, /FULFILLED: \["success", "Email sent"\]/);
   const page = fs.readFileSync("app/routes/app.notify-me.jsx", "utf8");
-  assert.ok(page.includes("Customers Waiting") && page.includes("Emails Sent"));
+  assert.ok(page.includes("Customers Waiting") && page.includes("Email count"));
   assert.equal(/Unsubscribed|opted out/i.test(page), false, "nothing about Unsubscribed on the page");
-  assert.match(page, /accepted by the mail server, not confirmed delivered or opened/);
+  assert.match(page, /accepted by the mail server/);
 });
 
 test("backend unsubscribe processing is untouched", () => {
