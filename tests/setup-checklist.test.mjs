@@ -432,3 +432,19 @@ dbTest("saving Wishlist Settings completes step 1, and checklist writes never di
   assert.equal((await getAppearance(shop.domain)).wishlistPage.layout, "grid");
   assert.equal(setupChecklist(after.state, { appearanceSaved: after.appearanceSaved, theme: { embed: null, product: null } }).completed, 1);
 });
+
+dbTest("a store seen for the first time gets its own shop row, once, and nothing else is created or touched", async () => {
+  const { ensureShop } = await import("../app/models/settings.server.js");
+  const domain = `kw-onb-first-${RUN}.myshopify.com`;
+  const other = await newShop("first-other");
+  domains.push(domain);
+  assert.equal(await prisma.shop.findUnique({ where: { domain } }), null, "a fresh install has no row yet");
+
+  const [one, two] = await Promise.all([ensureShop(domain), ensureShop(domain)]); // two screens loading at once
+  assert.equal(one.id, two.id, "both callers get the same row");
+  assert.equal(one.domain, domain);
+  assert.equal(await prisma.shop.count({ where: { domain } }), 1);
+  assert.equal(await prisma.shopSettings.count({ where: { shopId: one.id } }), 0, "no settings are invented");
+  assert.equal((await ensureShop(domain)).installedAt.getTime(), one.installedAt.getTime(), "a later visit does not reset the install time");
+  assert.equal((await prisma.shop.findUnique({ where: { id: other.id } })).currencyCode, "USD", "another shop is untouched");
+});

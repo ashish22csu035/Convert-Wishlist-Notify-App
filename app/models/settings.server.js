@@ -16,6 +16,20 @@ export { DEFAULT_SETTINGS, validateSettings };
 // Same placeholder shop row the storefront path creates before the real currency is known.
 const UNKNOWN_CURRENCY = "XXX";
 
+// The authenticated Admin session's own shop, created on first use. A shop row otherwise only appears with the first
+// saved setting or the first storefront activity, so a freshly installed store had no row and every report screen
+// showed "nothing recorded" instead of its real zeros. Only the verified session domain is ever passed in.
+const SHOP_REF = { id: true, domain: true, status: true, installedAt: true };
+export async function ensureShop(shopDomain) {
+  try {
+    return await prisma.shop.upsert({ where: { domain: shopDomain }, create: { domain: shopDomain, currencyCode: UNKNOWN_CURRENCY }, update: {}, select: SHOP_REF });
+  } catch (error) {
+    // Two screens loading at once on a first install can both try to create the row: the loser reads the winner's.
+    if (error?.code !== "P2002") throw error;
+    return prisma.shop.findUniqueOrThrow({ where: { domain: shopDomain }, select: SHOP_REF });
+  }
+}
+
 const pick = (row) => ({
   wishlistEnabled: row ? row.wishlistEnabled : DEFAULT_SETTINGS.wishlistEnabled,
   notifyMeEnabled: row ? row.notifyMeEnabled : DEFAULT_SETTINGS.notifyMeEnabled,

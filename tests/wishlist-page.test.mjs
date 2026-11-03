@@ -100,7 +100,7 @@ class Dom {
     if (sel.startsWith(".")) return this.has(sel.slice(1));
     const attr = /^([a-z]*)\[([\w-]+)\]$/.exec(sel);
     if (attr) return (!attr[1] || this.tag === attr[1]) && attr[2] in this.attrs;
-    return /^[a-z]+$/.test(sel) ? this.tag === sel : false;
+    return /^[a-z-]+$/.test(sel) ? this.tag === sel : false;
   }
   closest(sel) {
     for (let n = this; n; n = n.parent) if (n.matches(sel)) return n;
@@ -165,7 +165,7 @@ const PRODUCTS = {
 //   inventory  { "<variant id>": max | null }  what /api/inventory reports (mutable)
 //   cart       { fail, failStatus, unconfirmed }  Ajax Cart behaviour
 //   root       Shopify.routes.root (localized storefronts use e.g. "/fr/")
-async function mount({ loggedIn = true, openFails = false, backend, cart = {}, inventory = {}, inventoryDown = false, notify = {}, subscribed = new Set(), statusFails = false, storage = null, root = "/", requestError = false, removeError = false, readyError = false } = {}) {
+async function mount({ loggedIn = true, openFails = false, backend, cart = {}, inventory = {}, inventoryDown = false, notify = {}, subscribed = new Set(), statusFails = false, storage = null, root = "/", requestError = false, removeError = false, readyError = false, drawer = null } = {}) {
   const body = new Dom("div");
   const head = new Dom("head");
   const configNode = new Dom("script");
@@ -189,6 +189,16 @@ async function mount({ loggedIn = true, openFails = false, backend, cart = {}, i
   const pageBody = new Dom("div");
   pageBody.attrs["data-kw-page-body"] = "";
   [configNode, count, select, pageBody].forEach((n) => body.appendChild(n));
+
+  // A Dawn-style theme drawer: renderContents(response) is what the theme itself calls after an add.
+  if (drawer) {
+    const node = new Dom("cart-drawer");
+    node.renderContents = (response) => {
+      drawer.rendered.push(response);
+      if (drawer.throws) throw new Error("render failed");
+    };
+    body.appendChild(node);
+  }
 
   const log = { requests: [], cart: [], calls: [], inventoryCalls: [], toasts: [], opens: [], notify: [], status: [], productFetches: [] };
   const cartItems = [];
@@ -282,7 +292,8 @@ async function mount({ loggedIn = true, openFails = false, backend, cart = {}, i
         return { ok: false, status: state.cart.failStatus ?? 422, json: async () => ({ status: 422, message: "Cart Error", description: state.cart.fail }) };
       }
       if (!state.cart.unconfirmed) for (const line of payload.items) cartItems.push({ variant_id: line.id, quantity: line.quantity });
-      return { ok: true, status: 200, json: async () => ({ items: payload.items }) };
+      const sections = payload.sections && !drawer?.noSections ? Object.fromEntries(payload.sections.split(",").map((id) => [id, `<div id="shopify-section-${id}">${id}</div>`])) : undefined;
+      return { ok: true, status: 200, json: async () => ({ items: payload.items, ...(sections ? { sections } : {}) }) };
     }
     if (url.endsWith("cart.js")) {
       log.calls.push(`GET ${url}`);
@@ -1093,4 +1104,41 @@ test("the product copy kept in the tab expires: stale stock data is refetched, f
   const legacy = await mount({ backend: { items: [SHIRT_SOLD_OUT] }, storage });
   assert.ok(legacy.log.productFetches.includes("shirt"), "the old never-expiring cache entries are ignored");
   assert.equal(text(legacy.rows()[0], ".kw-stock"), "Out of stock");
+});
+
+test("a theme cart drawer is re-rendered through its own renderContents with the sections Shopify rendered for the add", async () => {
+  const drawer = { rendered: [] };
+  const page = await mount({ backend: { items: [SNOWBOARD, GIFT] }, drawer });
+  await page.rows()[0].find(".kw-btn-cart").click();
+  await tick();
+
+  assert.deepEqual(page.log.cart, [{ items: [{ id: 11, quantity: 1 }], sections: "cart-drawer,cart-icon-bubble", sections_url: "/apps/konvert-notify/my-wishlist" }], "one add request that also asks for the drawer sections");
+  assert.equal(drawer.rendered.length, 1, "the drawer is rendered exactly once per add");
+  assert.deepEqual(Object.keys(drawer.rendered[0].sections), ["cart-drawer", "cart-icon-bubble"]);
+  assert.equal(page.log.calls.filter((call) => call.startsWith("POST")).length, 1, "the product is submitted once");
+  assert.deepEqual(page.log.toasts, ["Added to cart"]);
+});
+
+test("a failing theme drawer render does not turn a confirmed add into an error, and a response without drawer sections is not rendered", async () => {
+  const throwing = { rendered: [], throws: true };
+  const a = await mount({ backend: { items: [SNOWBOARD] }, drawer: throwing });
+  await a.rows()[0].find(".kw-btn-cart").click();
+  await tick();
+  assert.deepEqual(a.log.toasts, ["Added to cart"]);
+
+  const bare = { rendered: [], noSections: true };
+  const b = await mount({ backend: { items: [SNOWBOARD] }, drawer: bare });
+  await b.rows()[0].find(".kw-btn-cart").click();
+  await tick();
+  assert.equal(bare.rendered.length, 0, "nothing to render without the sections; the event fallback is used instead");
+  assert.deepEqual(b.log.toasts, ["Added to cart"]);
+});
+
+test("a rejected add never renders the theme drawer", async () => {
+  const drawer = { rendered: [] };
+  const page = await mount({ backend: { items: [SNOWBOARD] }, drawer, cart: { fail: "Sold out", failStatus: 422 } });
+  await page.rows()[0].find(".kw-btn-cart").click();
+  await tick();
+  assert.equal(drawer.rendered.length, 0);
+  assert.equal(page.rows().length, 1, "the product stays on the wishlist");
 });

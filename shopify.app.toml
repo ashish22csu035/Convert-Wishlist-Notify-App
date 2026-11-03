@@ -2,7 +2,7 @@
 
 client_id = "80714e37a7e07b449d7a88d5472005ad"
 name = "konvert-wishlist-notify"
-application_url = "https://16-178-155-248.sslip.io"
+application_url = "https://konvert-notify-me.konvertapps.co/"
 embedded = true
 
 [access_scopes]
@@ -63,6 +63,6 @@ subpath = "konvert-notify"
 prefix = "apps"
 
 [auth]
-redirect_urls = [ "https://16-178-155-248.sslip.io/auth/callback" ]
+redirect_urls = [ "https://konvert-notify-me.konvertapps.co/auth/callback" ]
 [build]
 automatically_update_urls_on_dev = true

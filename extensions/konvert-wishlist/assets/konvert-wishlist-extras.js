@@ -717,7 +717,46 @@
   // Dawn-style themes publish a cartUpdate event and render #cart-icon-bubble
   // from a section. Anything else is left alone, and a plain DOM event is fired
   // for custom themes to listen to.
-  function refreshThemeCart(cart) {
+  //
+  // A Dawn-style <cart-drawer> that was rendered empty has no <cart-drawer-items> to
+  // react to the cartUpdate event, so it kept saying "Your cart is empty" until a page
+  // reload. The theme's own way to update it is cartDrawer.renderContents(response):
+  // it swaps in the drawer and icon sections that Shopify rendered for this very add
+  // (the `sections` of the cart/add.js response, see themeSections), clears the empty
+  // state and opens the drawer. That path is used when the theme offers it; the event
+  // and the icon refresh below are the fallback for every other theme.
+  function themeDrawer() {
+    var drawer = document.querySelector('cart-drawer');
+    return drawer && typeof drawer.renderContents === 'function' ? drawer : null;
+  }
+
+  // The section ids the theme's drawer re-renders from (Dawn: cart-drawer + cart-icon-bubble).
+  // Empty for themes without such a drawer, so their cart/add.js request stays as it was.
+  function themeSections() {
+    return themeDrawer() ? ['cart-drawer', 'cart-icon-bubble'] : [];
+  }
+
+  function renderThemeDrawer(added) {
+    var drawer = themeDrawer();
+    var sections = added && added.sections;
+    if (!drawer || !sections || !sections['cart-drawer']) return false;
+    try {
+      drawer.renderContents(added);
+      return true;
+    } catch (error) {
+      return false; // the fallback below still refreshes what it can
+    }
+  }
+
+  function refreshThemeCart(cart, added) {
+    if (renderThemeDrawer(added)) {
+      try {
+        document.dispatchEvent(new CustomEvent('kw:cart-updated', { detail: cart }));
+      } catch (error) {
+        /* CustomEvent unavailable */
+      }
+      return;
+    }
     try {
       if (typeof publish === 'function' && typeof PUB_SUB_EVENTS !== 'undefined' && PUB_SUB_EVENTS.cartUpdate) {
         publish(PUB_SUB_EVENTS.cartUpdate, { source: 'konvert-wishlist', cartData: cart });
@@ -748,10 +787,17 @@
   // Shopify Ajax Cart API (https://shopify.dev/docs/api/ajax/reference/cart).
   // Success is only reported after cart.js confirms the lines are in the cart.
   function addToCart(lines) {
+    var payload = { items: lines };
+    var sections = themeSections();
+    if (sections.length) {
+      payload.sections = sections.join(',');
+      payload.sections_url = window.location.pathname;
+    }
+    var added = null;
     return fetch(kw.shopRoot() + 'cart/add.js', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ items: lines })
+      body: JSON.stringify(payload)
     })
       .then(function (response) {
         return parseJson(response).then(function (data) {
@@ -761,6 +807,7 @@
             failure.userMessage = (data && (data.description || data.message)) || null;
             throw failure;
           }
+          added = data;
           return data;
         });
       })
@@ -778,7 +825,7 @@
           });
         });
         if (!present) throw unconfirmed();
-        refreshThemeCart(cart);
+        refreshThemeCart(cart, added);
         return cart;
       });
   }
@@ -1295,6 +1342,10 @@
       var label = add.textContent;
       add.disabled = true;
       add.textContent = text('adding', 'Adding…');
+      // A row's own Add to cart must not fire while the same product is in this request.
+      buyable.forEach(function (row) {
+        setBusy(row, true);
+      });
       addToCart(buyable.map(lineFor))
         .then(function () {
           return recordWishlistCartAdds(buyable).then(function () {
@@ -1306,6 +1357,9 @@
           if (error && error.status === 422) loadInventory(buyable);
         })
         .then(function () {
+          buyable.forEach(function (row) {
+            setBusy(row, false);
+          });
           add.textContent = label;
           updateBulk();
         });
