@@ -49,6 +49,7 @@
     "line_total": "Subtotal",
     "line_total_hint": "Estimated subtotal (price × quantity). Discounts, taxes and shipping are applied in the cart and at checkout.",
     "cart_unconfirmed": "We could not confirm that this was added to your cart. Please check your cart.",
+    "cart_preview_stale": "Added to your cart, but the cart preview could not refresh. Open your cart to review it.",
     "invalid_variant": "This product option cannot be added from here. Please open the product page.",
     "invalid_quantity": "Please enter a valid quantity.",
     "cart_stock": "We could not add that quantity because not enough stock is available. Please choose a smaller quantity.",
@@ -68,6 +69,8 @@
     "notify_unavailable": "Back-in-stock notifications aren't available right now. Please contact the store.",
     "notify_not_offered": "We couldn't confirm that this item is out of stock yet, so we haven't set up a notification. Please try again in a moment.",
     "notify_error": "We couldn't set up your notification. Please try again.",
+    "notify_not_found": "We couldn't find this item. Please refresh the page and try again.",
+    "notify_temporary": "Notifications are temporarily unavailable. Please try again in a few minutes.",
     "notify_login_redirect": "Please log in to be notified. Taking you to the login page…",
     "notify_login_still_required": "Please log in to finish setting up your notification."
   }

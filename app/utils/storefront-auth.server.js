@@ -134,6 +134,18 @@ export function safeErrorSummary(error) {
 export function logFailure(scope, requestId, error, shopDomain) {
   console.error(
     `[wishlist] ${scope} failed`,
-    JSON.stringify({ requestId, shop: shopDomain ?? null, ...safeErrorSummary(error) }),
+    JSON.stringify({ requestId, shop: shopDomain ?? null, stage: error?.stage ?? null, ...safeErrorSummary(error) }),
+  );
+}
+
+// A request that was answered with a short error code on purpose (a refusal such as variant_available, or
+// shop_unavailable). One line with the code, status, the step that produced it and the requestId the browser
+// also receives (X-KW-Request-Id), so "the storefront said something went wrong" can be matched to its cause.
+// Codes and ids only: no customer, email, token or Shopify message.
+export function logRefusal(scope, requestId, error, shopDomain, variantId) {
+  const level = error?.status >= 500 ? "error" : "warn";
+  console[level](
+    `[wishlist] ${scope} refused`,
+    JSON.stringify({ requestId, shop: shopDomain ?? null, stage: error?.stage ?? null, code: error?.code ?? null, status: error?.status ?? null, variant: variantId ?? null }),
   );
 }

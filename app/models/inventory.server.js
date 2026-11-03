@@ -1,4 +1,4 @@
-import { unauthenticated } from "../shopify.server";
+import { getShopAdmin } from "./shopify-lookup.server";
 import { sellableCap } from "../utils/inventory.server";
 
 const QUERY = `#graphql
@@ -22,7 +22,7 @@ const QUERY = `#graphql
 // `max: null` means the store sells without a limit (untracked inventory or
 // "continue selling when out of stock").
 export async function fetchSellableCaps(shopDomain, variantIds) {
-  const { admin } = await unauthenticated.admin(shopDomain);
+  const { admin } = await getShopAdmin(shopDomain); // shares the one session renewal with any other request
   const response = await admin.graphql(QUERY, {
     variables: { ids: variantIds.map((id) => `gid://shopify/ProductVariant/${id}`) },
   });

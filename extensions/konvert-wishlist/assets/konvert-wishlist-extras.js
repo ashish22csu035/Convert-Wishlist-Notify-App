@@ -123,6 +123,8 @@
       function fail(message) {
         var failure = new Error(message);
         failure.status = response.status;
+        // The id the server also wrote to its log (random, no personal data): lets a failed click be matched to its cause.
+        failure.requestId = response.headers && response.headers.get ? response.headers.get('X-KW-Request-Id') : null;
         throw failure;
       }
       return response.json().then(
@@ -151,7 +153,7 @@
   kw.request = request;
 
   function warn(what, error) {
-    if (window.console) console.warn('[konvert-wishlist] ' + what, error && error.message, error && error.status);
+    if (window.console) console.warn('[konvert-wishlist] ' + what, error && error.message, error && error.status, (error && error.requestId) || '');
   }
 
   // A wishlist item is one VARIANT. Items are keyed by variant id. An older item saved
@@ -713,87 +715,167 @@
     return failure;
   }
 
-  // Lets the active theme refresh its own cart UI, when it offers a way to:
-  // Dawn-style themes publish a cartUpdate event and render #cart-icon-bubble
-  // from a section. Anything else is left alone, and a plain DOM event is fired
-  // for custom themes to listen to.
+  // ----- keeping the theme's cart UI in step with the cart -----
   //
-  // A Dawn-style <cart-drawer> that was rendered empty has no <cart-drawer-items> to
-  // react to the cartUpdate event, so it kept saying "Your cart is empty" until a page
-  // reload. The theme's own way to update it is cartDrawer.renderContents(response):
-  // it swaps in the drawer and icon sections that Shopify rendered for this very add
-  // (the `sections` of the cart/add.js response, see themeSections), clears the empty
-  // state and opens the drawer. That path is used when the theme offers it; the event
-  // and the icon refresh below are the fallback for every other theme.
+  // Shopify has accepted the add when this runs. The theme's cart UI (drawer, icon bubble) does
+  // not know about it, because the add did not go through the theme's own product form, so it is
+  // refreshed here from Shopify's Section Rendering API, using only what the page itself shows:
+  //   1. Dawn-style <cart-drawer> with renderContents(): the theme's own method. It swaps in the
+  //      drawer and icon sections, clears the empty state and opens the drawer.
+  //   2. Any other theme: the cart-related sections that exist on the page ('shopify-section-<id>'
+  //      wrappers whose id mentions "cart") are re-rendered and REPLACED in place, never appended,
+  //      so nothing can be duplicated.
+  //   3. Neither found: the theme's pub/sub event (Dawn) and a plain 'kw:cart-updated' DOM event.
+  // The sections are asked for in the add request itself (one round trip, rendered after the
+  // add). If the answer lacks them they are requested once more. A refresh that is known to have
+  // failed is reported to the customer instead of a plain "Added to cart".
+  var SECTION_PREFIX = 'shopify-section-';
+  var MAX_CART_SECTIONS = 5;
+
+  function cartDebug(stage, info) {
+    try {
+      var on = (window.localStorage && window.localStorage.getItem('kw_debug') === '1') || /[?&]kw_debug=1/.test(window.location.search || '');
+      if (on && window.console) console.info('[konvert-wishlist] cart ' + stage, info === undefined ? '' : info);
+    } catch (error) {
+      /* diagnostics only */
+    }
+  }
+
   function themeDrawer() {
     var drawer = document.querySelector('cart-drawer');
     return drawer && typeof drawer.renderContents === 'function' ? drawer : null;
   }
 
-  // The section ids the theme's drawer re-renders from (Dawn: cart-drawer + cart-icon-bubble).
-  // Empty for themes without such a drawer, so their cart/add.js request stays as it was.
-  function themeSections() {
-    return themeDrawer() ? ['cart-drawer', 'cart-icon-bubble'] : [];
+  // Ids of the sections the theme renders its cart UI from, as found on this page.
+  function cartSectionIds() {
+    var found = [];
+    function add(id) {
+      if (id && found.indexOf(id) === -1 && found.length < MAX_CART_SECTIONS) found.push(id);
+    }
+    var wrappers = document.querySelectorAll('[id^="' + SECTION_PREFIX + '"]');
+    for (var i = 0; i < wrappers.length; i += 1) {
+      var id = String(wrappers[i].id).slice(SECTION_PREFIX.length);
+      if (/cart/i.test(id)) add(id);
+    }
+    if (themeDrawer()) {
+      add('cart-drawer');
+      add('cart-icon-bubble');
+    }
+    return found;
   }
 
-  function renderThemeDrawer(added) {
-    var drawer = themeDrawer();
-    var sections = added && added.sections;
-    if (!drawer || !sections || !sections['cart-drawer']) return false;
-    try {
-      drawer.renderContents(added);
-      return true;
-    } catch (error) {
-      return false; // the fallback below still refreshes what it can
-    }
+  function sectionFragment(html) {
+    var parsed = new DOMParser().parseFromString(html, 'text/html');
+    return parsed.querySelector('.shopify-section') || parsed.body || null;
   }
 
-  function refreshThemeCart(cart, added) {
-    if (renderThemeDrawer(added)) {
-      try {
-        document.dispatchEvent(new CustomEvent('kw:cart-updated', { detail: cart }));
-      } catch (error) {
-        /* CustomEvent unavailable */
-      }
-      return;
-    }
-    try {
-      if (typeof publish === 'function' && typeof PUB_SUB_EVENTS !== 'undefined' && PUB_SUB_EVENTS.cartUpdate) {
-        publish(PUB_SUB_EVENTS.cartUpdate, { source: 'konvert-wishlist', cartData: cart });
-      }
-    } catch (error) {
-      /* theme integration is best effort */
-    }
-    try {
-      document.dispatchEvent(new CustomEvent('kw:cart-updated', { detail: cart }));
-    } catch (error) {
-      /* CustomEvent unavailable */
-    }
-    var bubble = document.querySelector('#cart-icon-bubble');
-    if (!bubble) return;
-    fetch(kw.shopRoot() + '?sections=cart-icon-bubble', { headers: { Accept: 'application/json' } })
+  // Replaces the content of an existing section wrapper. Returns false when there is nothing to replace.
+  function swapSection(id, html) {
+    var wrapper = document.getElementById(SECTION_PREFIX + id);
+    var fragment = wrapper && typeof html === 'string' && html ? sectionFragment(html) : null;
+    if (!wrapper || !fragment) return false;
+    wrapper.innerHTML = fragment.innerHTML;
+    return true;
+  }
+
+  function fetchSections(ids) {
+    return fetch(kw.shopRoot() + '?sections=' + encodeURIComponent(ids.join(',')), { headers: { Accept: 'application/json' } })
       .then(function (response) {
         return response.ok ? response.json() : null;
       })
-      .then(function (sections) {
-        var html = sections && sections['cart-icon-bubble'];
-        if (!html) return;
-        var section = new DOMParser().parseFromString(html, 'text/html').querySelector('.shopify-section');
-        if (section) bubble.innerHTML = section.innerHTML;
-      })
-      .catch(function () {});
+      .catch(function () {
+        return null;
+      });
   }
 
+  // Dawn's drawer shows `.drawer__inner.is-empty` while the cart is empty.
+  // true = still shows the empty state, false = does not, null = no such drawer to look at.
+  function drawerShowsEmpty() {
+    var drawer = themeDrawer();
+    if (!drawer) return null;
+    var inner = drawer.querySelector('.drawer__inner');
+    return Boolean(inner && inner.classList.contains('is-empty'));
+  }
+
+  // Resolves { done, via }. Never rejects: the cart is already updated, only the preview can fail.
+  function refreshThemeCart(cart, added) {
+    var ids = cartSectionIds();
+    var sections = added && added.sections ? added.sections : null;
+    var ready = sections || !ids.length ? Promise.resolve(sections) : fetchSections(ids);
+    return ready
+      .then(function (rendered) {
+        rendered = rendered || {};
+        cartDebug('sections', { asked: ids, received: Object.keys(rendered) });
+        var drawer = themeDrawer();
+        var via = null;
+        if (drawer && rendered['cart-drawer'] && rendered['cart-icon-bubble']) {
+          try {
+            drawer.renderContents({ id: added && added.id, sections: rendered });
+            via = 'renderContents';
+          } catch (error) {
+            warn('theme drawer renderContents failed', error);
+          }
+        }
+        if (!via) {
+          var swapped = 0;
+          Object.keys(rendered).forEach(function (id) {
+            if (swapSection(id, rendered[id])) swapped += 1;
+          });
+          if (swapped) via = 'sections';
+        }
+        if (!via) {
+          try {
+            if (typeof publish === 'function' && typeof PUB_SUB_EVENTS !== 'undefined' && PUB_SUB_EVENTS.cartUpdate) {
+              publish(PUB_SUB_EVENTS.cartUpdate, { source: 'konvert-wishlist', cartData: cart });
+              via = 'event';
+            }
+          } catch (error) {
+            /* theme integration is best effort */
+          }
+        }
+        try {
+          document.dispatchEvent(new CustomEvent('kw:cart-updated', { detail: cart }));
+        } catch (error) {
+          /* CustomEvent unavailable */
+        }
+        // A drawer that still says "empty" while the cart has items is a refresh that did not work.
+        var stale = Number(cart && cart.item_count) > 0 && drawerShowsEmpty() === true;
+        if (stale) warn('theme cart drawer still shows the empty state after the cart changed', { message: 'via ' + (via || 'none') });
+        cartDebug('refreshed', { via: via, stale: stale });
+        return { done: !stale, via: via };
+      })
+      .catch(function (error) {
+        warn('cart preview refresh failed', error);
+        return { done: false, via: null };
+      });
+  }
+
+  function noop() {}
+
   // Shopify Ajax Cart API (https://shopify.dev/docs/api/ajax/reference/cart).
-  // Success is only reported after cart.js confirms the lines are in the cart.
+  // Success is only reported after cart.js confirms the lines are in the cart. The returned cart
+  // carries kwPreviewStale = true when the theme's cart preview could not be brought up to date.
+  // Adds run one after another, so two quick clicks can never interleave their cart refreshes.
+  var cartQueue = Promise.resolve();
   function addToCart(lines) {
+    var run = cartQueue.then(function () {
+      return addToCartNow(lines);
+    });
+    cartQueue = run.then(noop, noop);
+    return run;
+  }
+
+  function addToCartNow(lines) {
     var payload = { items: lines };
-    var sections = themeSections();
-    if (sections.length) {
-      payload.sections = sections.join(',');
-      payload.sections_url = window.location.pathname;
+    var ids = cartSectionIds();
+    if (ids.length) {
+      payload.sections = ids.join(',');
+      // The shop's own root, not this page: the My Wishlist page is an app-proxy page that Shopify
+      // cannot render sections for, and the cart UI does not depend on which page it is shown on.
+      payload.sections_url = kw.shopRoot();
     }
     var added = null;
+    cartDebug('add', { lines: lines.length, sections: ids });
     return fetch(kw.shopRoot() + 'cart/add.js', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -825,9 +907,19 @@
           });
         });
         if (!present) throw unconfirmed();
-        refreshThemeCart(cart, added);
-        return cart;
+        return refreshThemeCart(cart, added).then(function (outcome) {
+          if (!outcome.done) cart.kwPreviewStale = true;
+          return cart;
+        });
       });
+  }
+
+  // What to tell the customer after a confirmed add: plain success, or success plus the honest
+  // note that the cart preview did not refresh (the cart itself is correct).
+  function addedMessage(cart) {
+    return cart && cart.kwPreviewStale
+      ? text('cartPreviewStale', 'Added to your cart, but the cart preview could not refresh. Open your cart to review it.')
+      : text('addedToCart', 'Added to cart');
   }
 
   function cartFailed(error) {
@@ -1156,12 +1248,12 @@
     button.textContent = text('adding', 'Adding…');
 
     addToCart([lineFor(row)]).then(
-      function () {
+      function (cart) {
         return recordWishlistCartAdds([row]).then(function () {
           return removeOne(row);
         }).then(function (removed) {
           if (removed) {
-            kw.showToast(text('addedToCart', 'Added to cart'), false);
+            kw.showToast(addedMessage(cart), false);
             afterRemoval();
             return;
           }
@@ -1347,9 +1439,9 @@
         setBusy(row, true);
       });
       addToCart(buyable.map(lineFor))
-        .then(function () {
+        .then(function (cart) {
           return recordWishlistCartAdds(buyable).then(function () {
-            kw.showToast(text('addedToCart', 'Added to cart'), false);
+            kw.showToast(addedMessage(cart), false);
           });
         })
         .catch(function (error) {
@@ -1705,6 +1797,9 @@
     if (code === 'feature_disabled') return text('notifyUnavailable', "Back-in-stock notifications aren't available right now. Please contact the store.");
     if (code === 'inventory_unsettled') return text('notifyNotOffered', "We couldn't confirm that this item is out of stock yet, so we haven't set up a notification. Please try again in a moment.");
     if (code === 'variant_available') return text('notifyAvailable', 'Good news: this item is back in stock.');
+    if (code === 'variant_not_found') return text('notifyNotFound', "We couldn't find this item. Please refresh the page and try again.");
+    // The store's connection to Shopify could not be used just now (not something the customer did wrong).
+    if (code === 'shop_unavailable') return text('notifyTemporary', 'Notifications are temporarily unavailable. Please try again in a few minutes.');
     return text('notifyError', "We couldn't set up your notification. Please try again.");
   }
 

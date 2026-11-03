@@ -1,6 +1,7 @@
 import {
   authenticateStorefront,
   logFailure,
+  logRefusal,
   newRequestId,
   noStoreJson,
 } from "../utils/storefront-auth.server";
@@ -45,6 +46,7 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const requestId = newRequestId();
   let shopDomain;
+  let variantNumber = null; // for the log line only
   try {
     const identity = await authenticateStorefront(request);
     shopDomain = identity.shopDomain;
@@ -80,6 +82,7 @@ export const action = async ({ request }) => {
       const variantGid =
         typeof rawId === "string" || typeof rawId === "number" ? toGid("ProductVariant", rawId) : null;
       if (!variantGid) return noStoreJson({ error: "invalid_request" }, 400, requestId);
+      variantNumber = variantGid.split("/").pop();
       result = await subscribeToNotify(identity, variantGid, { storefrontSoldOut: body.storefrontSoldOut === true });
     } else {
       result = await recordNotifyMeOpen(identity);
@@ -88,6 +91,7 @@ export const action = async ({ request }) => {
   } catch (error) {
     if (error instanceof Response) throw error;
     if (error instanceof WishlistError || error instanceof LookupError) {
+      logRefusal("POST notify", requestId, error, shopDomain, variantNumber);
       return noStoreJson({ error: error.code }, error.status, requestId);
     }
     logFailure("POST notify", requestId, error, shopDomain);

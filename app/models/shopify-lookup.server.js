@@ -74,11 +74,41 @@ export function hasCustomerScope(scope) {
 }
 
 // Offline Admin session for the verified shop. Returns { admin, scope }.
-export async function getShopAdmin(shopDomain) {
+//
+// The offline token expires (about an hour) and is renewed here, on demand, with a refresh token that Shopify
+// issues for a single use. Two things follow:
+//   - Requests that need the session at the same moment (a Wishlist page asks for stock while a customer clicks
+//     Notify Me) must share ONE renewal. Each shop's load is kept in `inFlight`, so concurrent callers in this
+//     process wait for the same answer instead of spending the same refresh token twice.
+//   - A renewal lost to another process (the worker) leaves the new token already stored, so one more attempt
+//     after a short wait reads it. A second failure is real.
+// Whatever the cause, the caller still sees only shop_unavailable (503); the cause (an error class and an HTTP
+// status, never a token or a message from Shopify) goes to the server log so the failure can be explained.
+const ADMIN_RETRY_MS = 300;
+const inFlight = new Map();
+const defaultWait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function loadAdminSession(shopDomain, { createAdmin, wait }) {
   try {
-    const { admin, session } = await unauthenticated.admin(shopDomain);
-    return { admin, scope: session?.scope ?? "" };
+    return await createAdmin(shopDomain);
   } catch {
+    await wait(ADMIN_RETRY_MS);
+    return createAdmin(shopDomain);
+  }
+}
+
+export async function getShopAdmin(shopDomain, { createAdmin = (shop) => unauthenticated.admin(shop), wait = defaultWait } = {}) {
+  let pending = inFlight.get(shopDomain);
+  if (!pending) {
+    pending = loadAdminSession(shopDomain, { createAdmin, wait }).finally(() => inFlight.delete(shopDomain));
+    inFlight.set(shopDomain, pending);
+  }
+  try {
+    const { admin, session } = await pending;
+    return { admin, scope: session?.scope ?? "" };
+  } catch (error) {
+    const status = error?.status ?? error?.response?.code ?? null;
+    console.error("[wishlist] the Admin session could not be loaded", JSON.stringify({ shop: shopDomain, kind: error?.constructor?.name ?? "Error", status, code: error?.code ?? null }));
     throw new LookupError("shop_unavailable", 503);
   }
 }

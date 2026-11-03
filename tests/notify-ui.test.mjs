@@ -256,7 +256,7 @@ test("backend rejections are shown and never reported as a success", async () =>
     ["customer_data_unavailable", 403, /not available right now/i],
     ["customer_email_unavailable", 422, /email address/i],
     ["customer_not_found", 404, /email address/i],
-    ["shop_unavailable", 503, /could not set up/i],
+    ["shop_unavailable", 503, /temporarily unavailable/i], // its own message since the Admin-session fix: not the customer's doing
     ["server_error", 500, /could not set up/i],
   ]) {
     const page = await mount({ selected: "1001", notify: { error, status } });

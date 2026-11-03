@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "80714e37a7e07b449d7a88d5472005ad"
+client_id = "138e342cbaa495cd295a588fda1c5101"
 name = "konvert-wishlist-notify"
 application_url = "https://konvert-notify-me.konvertapps.co/"
 embedded = true

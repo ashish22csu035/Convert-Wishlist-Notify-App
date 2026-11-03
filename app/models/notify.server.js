@@ -57,11 +57,25 @@ export async function listActiveSubscriptions({ shopDomain, customerGid }, varia
 // The matching rule on the restock side (inventory-webhook.server.js): for such a variant Admin's "available"
 // is not a restock, so a subscription taken here cannot trigger an email by itself.
 export async function subscribeToNotify(identity, variantGid, deps = {}) {
+  const progress = { stage: "start" };
+  try {
+    return await subscribe(identity, variantGid, deps, progress);
+  } catch (error) {
+    // Which step failed, for the server log (the storefront only ever sees the short error code).
+    if (error && typeof error === "object" && !error.stage) error.stage = progress.stage;
+    throw error;
+  }
+}
+
+async function subscribe(identity, variantGid, deps, progress) {
   const { getAdmin = getShopAdmin, sleep = defaultSleep, storefrontSoldOut = false, purchasable = resolveStorefrontPurchasable } = deps;
   // When Shopify is first asked about stock. Ordering of availability observations is judged by
   // this moment, so a restock processed after it can never be overwritten by this older reading.
   const observedAt = new Date();
+  progress.stage = "admin_session";
   const { admin, scope } = await getAdmin(identity.shopDomain);
+
+  progress.stage = "variant_lookup";
 
   let variant = await fetchVariantForNotify(admin, variantGid);
   // Right after a stock change Shopify's fields can contradict each other for a moment: look again a
@@ -75,6 +89,7 @@ export async function subscribeToNotify(identity, variantGid, deps = {}) {
     throw new LookupError("inventory_unsettled", 503);
   }
   if (!variant.unavailable) {
+    progress.stage = "availability_check";
     const verdict = await purchasable({ admin, shopDomain: identity.shopDomain, variant, variantGid }, deps);
     const accepted = verdict.purchasable === false || (verdict.purchasable === null && storefrontSoldOut === true);
     if (!accepted) {
@@ -85,9 +100,11 @@ export async function subscribeToNotify(identity, variantGid, deps = {}) {
     traceProxy({ stage: "notify_storefront_sold_out", variant: numericId(variantGid), basis: verdict.purchasable === false ? "storefront_confirmed" : "storefront_reported", seen: variant.seen });
   }
 
+  progress.stage = "customer_lookup";
   if (!hasCustomerScope(scope)) throw new LookupError("customer_data_unavailable", 403);
   const email = await fetchCustomerEmail(admin, identity.customerGid);
 
+  progress.stage = "save";
   return mutate(identity, "NOTIFY_ME", async (tx, context) => {
     const { shop, actor } = context;
     const now = new Date();

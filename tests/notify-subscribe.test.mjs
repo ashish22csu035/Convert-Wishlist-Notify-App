@@ -43,6 +43,7 @@ const EMAIL = "Buyer@Example.com";
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 let server;
+let serverOutput = "";
 let subscribeToNotify;
 let listActiveSubscriptions;
 let LookupError;
@@ -77,7 +78,7 @@ async function post(body, { shop = SHOP_A, customer = CUSTOMER, signed = true, t
   } catch {
     /* not JSON */
   }
-  return { status: response.status, json, text };
+  return { status: response.status, json, text, requestId: response.headers.get("x-kw-request-id") };
 }
 
 // Fake Admin API: answers the two queries the lookup module sends.
@@ -152,8 +153,8 @@ before(async () => {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
-  server.stdout.on("data", (chunk) => (output += chunk));
-  server.stderr.on("data", (chunk) => (output += chunk));
+  server.stdout.on("data", (chunk) => ((output += chunk), (serverOutput += chunk)));
+  server.stderr.on("data", (chunk) => ((output += chunk), (serverOutput += chunk)));
   const deadline = Date.now() + 30000;
   for (;;) {
     try {
@@ -645,4 +646,101 @@ test("resolveStorefrontPurchasable: Admin decides everywhere except third-party-
   assert.deepEqual(await run(variant, { thirdPartyOnly: true }, null), { purchasable: null, basis: "storefront_unreadable" });
   assert.deepEqual(await run({ ...variant, seen: { tracked: false, inventoryPolicy: "DENY" } }, { thirdPartyOnly: true }, false), { purchasable: true, basis: "admin" }, "untracked inventory is never overridden");
   assert.deepEqual(await run({ ...variant, seen: { tracked: true, inventoryPolicy: "CONTINUE" } }, { thirdPartyOnly: true }, false), { purchasable: true, basis: "admin" }, "overselling allowed is never overridden");
+});
+
+// ---- diagnosability of the generic "We couldn't set up your notification" ----------------------------
+test("an unusable Admin session answers 503 shop_unavailable AND is explained in the server log (stage, code, request id; no secrets or customer data)", async () => {
+  const response = await post({ op: "subscribe", variantId: VARIANT });
+  assert.equal(response.status, 503);
+  assert.equal(response.json.error, "shop_unavailable");
+  assert.match(response.requestId ?? "", /^[0-9a-f]{8}$/, "the browser receives the id of this request");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const line = serverOutput.split("\n").find((entry) => entry.includes("POST notify refused") && entry.includes(response.requestId));
+  assert.ok(line, "the refusal is in the server log under that request id");
+  const entry = JSON.parse(line.slice(line.indexOf("{")));
+  assert.deepEqual([entry.code, entry.status, entry.stage, entry.variant], ["shop_unavailable", 503, "admin_session", VARIANT]);
+  assert.ok(serverOutput.includes("the Admin session could not be loaded"), "and so is the reason the session was unusable");
+  assert.equal(serverOutput.includes(SECRET) || /buyer@example\.com/i.test(serverOutput), false, "no secret and no customer email in the log");
+});
+
+test("getShopAdmin: concurrent callers share one session renewal, one failed attempt is retried, a second failure is shop_unavailable", async () => {
+  const { getShopAdmin } = await import("../app/models/shopify-lookup.server.js");
+  const wait = async () => {};
+  const session = { scope: "read_customers" };
+
+  // a Wishlist page (stock lookup) and a Notify Me click arrive together: one renewal, not two
+  let renewals = 0;
+  const slow = async () => {
+    renewals += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return { admin: { name: "admin" }, session };
+  };
+  const [one, two] = await Promise.all([getShopAdmin(SHOP_A, { createAdmin: slow, wait }), getShopAdmin(SHOP_A, { createAdmin: slow, wait })]);
+  assert.equal(renewals, 1);
+  assert.equal(one.admin, two.admin);
+  assert.equal(one.scope, "read_customers");
+  await getShopAdmin(SHOP_A, { createAdmin: slow, wait });
+  assert.equal(renewals, 2, "nothing is cached afterwards: the next request asks again");
+
+  // another process (the worker) won the renewal: the first attempt fails, the second reads the new token
+  let attempts = 0;
+  const flaky = async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Response(undefined, { status: 500 });
+    return { admin: {}, session };
+  };
+  assert.equal((await getShopAdmin(SHOP_B, { createAdmin: flaky, wait })).scope, "read_customers");
+  assert.equal(attempts, 2);
+
+  // a real failure: two attempts, then the safe code. The cause is logged without any message text.
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => logged.push(args.join(" "));
+  try {
+    let tries = 0;
+    const broken = async () => {
+      tries += 1;
+      throw Object.assign(new Error("token abc123SECRET rejected"), { status: 401 });
+    };
+    await rejects(getShopAdmin(SHOP_C, { createAdmin: broken, wait }), "shop_unavailable");
+    assert.equal(tries, 2);
+  } finally {
+    console.error = original;
+  }
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /"status":401/);
+  assert.equal(logged[0].includes("abc123SECRET"), false, "Shopify's own message is never logged");
+});
+
+// Its own shop, so these tests see only the rows they create.
+const SHOP_GC = `kw-nt-gc-${RUN}.myshopify.com`;
+SHOPS.push(SHOP_GC);
+
+// A Gift Card product: one variant per denomination, each with its own inventory item.
+const giftCard = (denomination, over = {}) => {
+  const id = `gid://shopify/ProductVariant/${8200000000 + denomination}`;
+  return { id, inventoryPolicy: "DENY", sellableOnlineQuantity: 0, inventoryQuantity: 0, availableForSale: false, product: { id: "gid://shopify/Product/7200000001", handle: "gift-card" }, inventoryItem: { id: `gid://shopify/InventoryItem/${6200000000 + denomination}`, tracked: true }, ...over };
+};
+
+test("Gift Card denominations: a sold-out $25 variant is recorded for its own shop, product and variant only", async () => {
+  const twentyFive = giftCard(25);
+  const result = await subscribeToNotify(identity(SHOP_GC), twentyFive.id, deps(fakeAdmin({ variant: twentyFive, customer: customerRecord })));
+  assert.equal(result.subscribed, true);
+  const rows = await subsFor(SHOP_GC);
+  assert.deepEqual(rows.map((row) => [row.variantGid, row.productGid, row.status]), [[twentyFive.id, twentyFive.product.id, "ACTIVE"]]);
+  assert.equal((await subsFor(SHOP_A)).some((row) => row.variantGid === twentyFive.id), false, "no other shop gets a row");
+
+  const ten = giftCard(10);
+  await subscribeToNotify(identity(SHOP_GC), ten.id, deps(fakeAdmin({ variant: ten, customer: customerRecord })));
+  assert.deepEqual((await subsFor(SHOP_GC)).map((row) => row.variantGid).sort(), [ten.id, twentyFive.id].sort(), "each denomination is its own subscription");
+  await subscribeToNotify(identity(SHOP_GC), ten.id, deps(fakeAdmin({ variant: ten, customer: customerRecord })));
+  assert.equal((await subsFor(SHOP_GC)).length, 2, "repeating one does not add a row");
+});
+
+test("Gift Card variants Shopify itself contradicts are refused with their own codes, never with a generic failure, and write nothing", async () => {
+  const untrackedButUnavailable = giftCard(50, { sellableOnlineQuantity: null, inventoryQuantity: null, inventoryItem: { id: "gid://shopify/InventoryItem/6200000050", tracked: false } });
+  await rejects(subscribeToNotify(identity(SHOP_GC), untrackedButUnavailable.id, { ...deps(fakeAdmin({ variant: untrackedButUnavailable, customer: customerRecord })), sleep: async () => {} }), "inventory_unsettled");
+  const sellable = giftCard(100, { sellableOnlineQuantity: 5, inventoryQuantity: 5, availableForSale: true });
+  await rejects(subscribeToNotify(identity(SHOP_GC), sellable.id, deps(fakeAdmin({ variant: sellable, customer: customerRecord }))), "variant_available");
+  assert.deepEqual((await subsFor(SHOP_GC)).map((row) => row.variantGid).filter((gid) => gid.endsWith("200000050") || gid.endsWith("200000100")), []);
 });
