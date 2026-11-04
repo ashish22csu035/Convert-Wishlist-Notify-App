@@ -47,10 +47,13 @@ function throttleOf(source) {
 // Thrown for every reason the Admin API cannot give us what we need. `code` is
 // the safe, customer-facing error code; nothing from Shopify's response is kept.
 export class LookupError extends Error {
-  constructor(code, status) {
+  // `details` are diagnostics for the server log only (reason, graphqlCodes, detail, httpStatus); they are never sent
+  // to the browser, which only ever receives `code`.
+  constructor(code, status, details) {
     super(code);
     this.code = code;
     this.status = status;
+    if (details) Object.assign(this, details);
   }
 }
 
@@ -63,13 +66,16 @@ export class LookupError extends Error {
 // behind the generic code: `graphqlCodes` (e.g. ["ACCESS_DENIED"]) and `accessDenied` let a caller tell "this app may not
 // read this data" from "Shopify is unreachable", and `detail` (URLs and long numbers removed) is for the server log only.
 function shopUnavailable(source) {
-  const error = new LookupError("shop_unavailable", 503);
+  const error = new LookupError("shop_unavailable", 503, { reason: "shopify_error" });
   const graphQLErrors = Array.isArray(source) ? source : source?.body?.errors?.graphQLErrors;
   if (Array.isArray(graphQLErrors) && graphQLErrors.length) {
     error.graphqlCodes = [...new Set(graphQLErrors.map((item) => item?.extensions?.code).filter((code) => typeof code === "string"))].slice(0, 5);
     error.accessDenied = error.graphqlCodes.includes("ACCESS_DENIED");
   }
-  error.detail = safeErrorSummary(source).message || null;
+  // A failed HTTP answer (401, 403, 429, 5xx) is a different library error class with the status in response.code.
+  if (Number.isInteger(source?.response?.code)) error.httpStatus = source.response.code;
+  // Log text only: URLs and long numbers are removed by safeErrorSummary, and anything shaped like an email address here.
+  error.detail = safeErrorSummary(source).message.replace(/[^\s@]+@[^\s@]+/g, "[email]") || null;
   const throttle = throttleOf(source);
   if (throttle) {
     error.throttled = true;
@@ -249,18 +255,24 @@ export async function resolveStorefrontPurchasable({ admin, shopDomain, variant,
   return { purchasable: answer, basis: "storefront" };
 }
 
+// The customer-data refusal as the storefront sees it (403 customer_data_unavailable), keeping what Shopify said for the log
+// so a confirmed denial is distinguishable from the app's own scope check (reason "scope_not_granted") and from an outage.
+function deniedByShopify(failure) {
+  return new LookupError("customer_data_unavailable", 403, { reason: "shopify_access_denied", graphqlCodes: failure.graphqlCodes ?? null, detail: failure.detail ?? null });
+}
+
 export async function fetchCustomerEmail(admin, customerGid) {
   let json;
   try {
     json = await run(admin, CUSTOMER_QUERY, { id: customerGid });
   } catch (error) {
     // Shopify refused the customer data itself (the app is not approved for it): not an outage, and retrying cannot help.
-    if (error instanceof LookupError && error.accessDenied) throw new LookupError("customer_data_unavailable", 403);
+    if (error instanceof LookupError && error.accessDenied) throw deniedByShopify(error);
     throw error;
   }
   if (json.errors?.length) {
-    const denied = json.errors.some((error) => error?.extensions?.code === "ACCESS_DENIED");
-    throw denied ? new LookupError("customer_data_unavailable", 403) : shopUnavailable(json.errors);
+    const failure = shopUnavailable(json.errors);
+    throw failure.accessDenied ? deniedByShopify(failure) : failure;
   }
   const customer = json.data?.customer;
   if (!customer?.id) throw new LookupError("customer_not_found", 404);

@@ -146,6 +146,6 @@ export function logRefusal(scope, requestId, error, shopDomain, variantId) {
   const level = error?.status >= 500 ? "error" : "warn";
   console[level](
     `[wishlist] ${scope} refused`,
-    JSON.stringify({ requestId, shop: shopDomain ?? null, stage: error?.stage ?? null, code: error?.code ?? null, status: error?.status ?? null, variant: variantId ?? null, graphql: error?.graphqlCodes ?? null, detail: error?.detail ?? null }),
+    JSON.stringify({ requestId, shop: shopDomain ?? null, stage: error?.stage ?? null, code: error?.code ?? null, status: error?.status ?? null, variant: variantId ?? null, reason: error?.reason ?? null, graphql: error?.graphqlCodes ?? null, httpStatus: error?.httpStatus ?? null, detail: error?.detail ?? null }),
   );
 }

@@ -25,6 +25,13 @@ const require = createRequire(import.meta.url);
 const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 
+// Shopify's node adapter captures globalThis.fetch when the app is first imported (in before()). A forwarder installed here,
+// earlier, lets one test answer the library's Admin requests itself while everything else (this file's own HTTP calls to the
+// test server) still goes to the real fetch.
+let stubFetch = null;
+const realFetch = globalThis.fetch;
+globalThis.fetch = (...args) => (stubFetch ? stubFetch(...args) : realFetch(...args));
+
 const PORT = 3197;
 const BASE = `http://localhost:${PORT}`;
 const SECRET = "dummy-secret-for-tests-only";
@@ -749,74 +756,111 @@ test("Gift Card variants Shopify itself contradicts are refused with their own c
 const SHOP_TH = `kw-nt-th-${RUN}.myshopify.com`;
 SHOPS.push(SHOP_TH);
 
-// ---- the library THROWS GraphQL errors (it does not return them) ---------------------------------------
-// Confirmed against the installed @shopify/shopify-api: a 200 answer with errors is thrown as GraphqlQueryError with the
-// errors in body.errors.graphQLErrors. The fakes above return {errors}, which the real client never does, so the
-// customer-data refusal was reported as an outage (shop_unavailable 503) while the tests passed.
-async function thrownGraphqlAdmin({ customerErrors, variant = soldOut() }) {
-  const { GraphqlQueryError } = await import("@shopify/shopify-api");
-  return {
-    async graphql(query) {
-      if (query.includes("NotifyVariant")) return { json: async () => ({ data: { node: variant } }) };
-      throw new GraphqlQueryError({
-        message: customerErrors[0].message,
-        response: { code: 200 },
-        headers: {},
-        body: { errors: { graphQLErrors: customerErrors } },
-      });
-    },
-  };
+// ---- what the INSTALLED Shopify library really throws -----------------------------------------------------
+// These use the library's own Graphql client, with only the network answer stubbed, so the errors are the real classes:
+//   200 + GraphQL errors   GraphqlQueryError, errors in error.body.errors.graphQLErrors[].extensions.code
+//   401/403/429/5xx        HttpResponseError / HttpThrottlingError / HttpInternalError, status in error.response.code
+// (The fakes used elsewhere in this file RETURN {errors}, which this client never does.)
+let libraryApi;
+async function libraryAdmin(customerAnswer) {
+  const { shopifyApi, Session, ApiVersion } = await import("@shopify/shopify-api");
+  libraryApi ??= shopifyApi({ apiKey: "dummy-key", apiSecretKey: SECRET, hostName: "localhost", scopes: ["read_customers"], apiVersion: ApiVersion.July26, isEmbeddedApp: true });
+  const client = new libraryApi.clients.Graphql({ session: new Session({ id: "offline_test", shop: SHOP_TH, state: "s", isOnline: false, accessToken: "not-a-real-token" }) });
+  const reply = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
+  stubFetch = async (_url, init) => (String(init?.body).includes("NotifyCustomer") ? customerAnswer(reply) : reply(200, { data: { node: soldOut() } }));
+  return { graphql: async (query, options) => new Response(JSON.stringify(await client.request(query, { variables: options?.variables }))) };
 }
-const accessDenied = [{ message: "This app is not approved to access the Customer object.", extensions: { code: "ACCESS_DENIED" } }];
-
-test("customer data Shopify refuses to the app is customer_data_unavailable (403), tagged customer_lookup, and writes nothing", async () => {
-  const admin = await thrownGraphqlAdmin({ customerErrors: accessDenied });
-  let caught;
-  await subscribe(admin, { shop: SHOP_TH }).catch((error) => (caught = error));
-  assert.ok(caught instanceof LookupError);
-  assert.deepEqual([caught.code, caught.status, caught.stage], ["customer_data_unavailable", 403, "customer_lookup"]);
-  assert.equal((await subsFor(SHOP_TH)).length, 0, "no subscription without a verified customer email");
-});
-
-test("any other thrown GraphQL error stays shop_unavailable, but its Shopify codes and sanitized text reach the log", async () => {
-  const other = [{ message: "Internal error. Looks like something went wrong on our end. Request ID: 12345678-aaaa", extensions: { code: "INTERNAL_SERVER_ERROR" } }];
-  const admin = await thrownGraphqlAdmin({ customerErrors: other });
-  let caught;
-  await subscribe(admin, { shop: SHOP_TH }).catch((error) => (caught = error));
-  assert.deepEqual([caught.code, caught.status, caught.stage], ["shop_unavailable", 503, "customer_lookup"]);
-  assert.deepEqual(caught.graphqlCodes, ["INTERNAL_SERVER_ERROR"]);
-  assert.equal(caught.accessDenied, false);
-  assert.equal(/\d{5,}/.test(caught.detail), false, "long numbers are removed from the logged text");
-
-  const lines = [];
-  const original = console.error;
-  console.error = (...args) => lines.push(args.join(" "));
+async function failure(promise) {
   try {
-    const { logRefusal } = await import("../app/utils/storefront-auth.server.js");
-    logRefusal("POST notify", "abcd1234", caught, SHOP_TH, VARIANT);
+    await promise;
+  } catch (error) {
+    return error;
   } finally {
-    console.error = original;
+    stubFetch = null;
   }
-  assert.match(lines[0], /"graphql":\["INTERNAL_SERVER_ERROR"\]/);
-  assert.match(lines[0], /"stage":"customer_lookup"/);
-  assert.equal(/buyer@example\.com/i.test(lines[0]), false);
+  assert.fail("expected the request to be refused");
+}
+const gql = (code, message = "denied") => ({ message, extensions: { code } });
+const lookup = async (customerAnswer, opts = {}) => failure(subscribe(await libraryAdmin(customerAnswer), { shop: SHOP_TH, ...opts }));
+// what the route writes for a refusal, captured
+function refusalLog(error) {
+  const lines = [];
+  const [warn, err] = [console.warn, console.error];
+  console.warn = console.error = (...args) => lines.push(args.join(" "));
+  return import("../app/utils/storefront-auth.server.js").then(({ logRefusal }) => {
+    try {
+      logRefusal("POST notify", "abcd1234", error, SHOP_TH, VARIANT);
+    } finally {
+      [console.warn, console.error] = [warn, err];
+    }
+    return JSON.parse(lines[0].slice(lines[0].indexOf("{")));
+  });
+}
+
+test("a confirmed Shopify access denial keeps its GraphQL code and text, answers 403, and creates nothing", async () => {
+  const error = await lookup((reply) => reply(200, { data: { customer: null }, errors: [gql("ACCESS_DENIED", "This app is not approved to access the Customer object.")] }));
+  assert.deepEqual([error.code, error.status, error.stage, error.reason], ["customer_data_unavailable", 403, "customer_lookup", "shopify_access_denied"]);
+  assert.deepEqual(error.graphqlCodes, ["ACCESS_DENIED"]);
+  assert.match(error.detail, /not approved to access the Customer object/);
+  const line = await refusalLog(error);
+  assert.deepEqual([line.code, line.status, line.stage, line.reason, line.graphql], ["customer_data_unavailable", 403, "customer_lookup", "shopify_access_denied", ["ACCESS_DENIED"]]);
+  assert.equal((await subsFor(SHOP_TH)).length, 0, "no subscription without a verified customer");
 });
 
-test("a throttled customer query is still a retryable outage, not a refusal of the data", async () => {
-  const admin = await thrownGraphqlAdmin({ customerErrors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] });
-  let caught;
-  await subscribe(admin, { shop: SHOP_TH }).catch((error) => (caught = error));
-  assert.deepEqual([caught.code, caught.status, caught.throttled], ["shop_unavailable", 503, true]);
-});
-
-test("recovery: once Shopify lets the app read the customer, the same sold-out variant subscribes, once, for the right shop", async () => {
-  const denied = await thrownGraphqlAdmin({ customerErrors: accessDenied });
-  await rejects(subscribe(denied, { shop: SHOP_TH }), "customer_data_unavailable");
+test("a denial on only the email field (customer returned, field refused) is also a confirmed denial", async () => {
+  const error = await lookup((reply) =>
+    reply(200, { data: { customer: { id: CUSTOMER_GID, defaultEmailAddress: null } }, errors: [{ ...gql("ACCESS_DENIED"), path: ["customer", "defaultEmailAddress"] }] }),
+  );
+  assert.deepEqual([error.code, error.status, error.reason, error.graphqlCodes], ["customer_data_unavailable", 403, "shopify_access_denied", ["ACCESS_DENIED"]]);
   assert.equal((await subsFor(SHOP_TH)).length, 0);
+});
 
-  const approved = fakeAdmin({ variant: soldOut(), customer: customerRecord });
-  assert.equal((await subscribe(approved, { shop: SHOP_TH })).subscribed, true);
-  assert.equal((await subscribe(approved, { shop: SHOP_TH })).changed, false, "a repeat does not add another");
+test("an unrelated GraphQL error is NOT reported as a denial: 503 shop_unavailable with its own code in the log", async () => {
+  const error = await lookup((reply) => reply(200, { errors: [gql("INTERNAL_SERVER_ERROR", "Something went wrong on our end.")] }));
+  assert.deepEqual([error.code, error.status, error.reason, error.accessDenied, error.graphqlCodes], ["shop_unavailable", 503, "shopify_error", false, ["INTERNAL_SERVER_ERROR"]]);
+  const line = await refusalLog(error);
+  assert.deepEqual([line.code, line.reason, line.graphql, line.stage], ["shop_unavailable", "shopify_error", ["INTERNAL_SERVER_ERROR"], "customer_lookup"]);
+  assert.equal((await subsFor(SHOP_TH)).length, 0);
+});
+
+test("throttling and HTTP failures stay retryable 503s, and each is distinguishable in the log", async () => {
+  const throttledGraphql = await lookup((reply) => reply(200, { errors: [gql("THROTTLED", "Throttled")] }));
+  assert.deepEqual([throttledGraphql.code, throttledGraphql.status, throttledGraphql.throttled], ["shop_unavailable", 503, true]);
+
+  const throttledHttp = await lookup((reply) => reply(429, { errors: "Throttled" }, { "Retry-After": "2.0" }));
+  assert.deepEqual([throttledHttp.code, throttledHttp.status, throttledHttp.throttled, throttledHttp.retryAfterMs, throttledHttp.httpStatus], ["shop_unavailable", 503, true, 2000, 429]);
+
+  for (const status of [401, 403, 500]) {
+    const error = await lookup((reply) => reply(status, { errors: "[API] failed" }));
+    assert.deepEqual([error.code, error.status, error.httpStatus, error.accessDenied ?? false], ["shop_unavailable", 503, status, false], `HTTP ${status}`);
+    assert.equal(error.graphqlCodes, undefined, `HTTP ${status} carries no GraphQL code`);
+  }
+  assert.equal((await subsFor(SHOP_TH)).length, 0);
+});
+
+test("the app's own scope check is a different, labelled reason from a Shopify denial (and Shopify is never asked)", async () => {
+  let customerAsked = false;
+  const error = await lookup((reply) => ((customerAsked = true), reply(200, { data: { customer: null } })), { scope: "read_inventory" });
+  assert.deepEqual([error.code, error.status, error.reason, error.graphqlCodes], ["customer_data_unavailable", 403, "scope_not_granted", undefined]);
+  assert.equal(customerAsked, false);
+  const line = await refusalLog(error);
+  assert.deepEqual([line.reason, line.graphql], ["scope_not_granted", null]);
+});
+
+test("logged Shopify text never carries an email address, a long id or a URL", async () => {
+  const error = await lookup((reply) => reply(200, { errors: [gql("ACCESS_DENIED", "Cannot read buyer@example.com or customer 9100000001 see https://shopify.dev/docs/x")] }));
+  assert.equal(/buyer@example\.com|9100000001|https:/.test(error.detail), false, error.detail);
+  assert.match(error.detail, /\[email\]/);
+});
+
+test("recovery: once Shopify lets the app read the customer, the same sold-out variant subscribes once, for the right shop only", async () => {
+  const approved = await libraryAdmin((reply) => reply(200, { data: { customer: customerRecord } }));
+  try {
+    assert.equal((await subscribe(approved, { shop: SHOP_TH })).subscribed, true);
+    assert.equal((await subscribe(approved, { shop: SHOP_TH })).changed, false, "a repeat does not add another");
+  } finally {
+    stubFetch = null;
+  }
   const rows = await subsFor(SHOP_TH);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].variantGid, VARIANT_GID);

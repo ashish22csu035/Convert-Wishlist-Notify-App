@@ -101,7 +101,7 @@ async function subscribe(identity, variantGid, deps, progress) {
   }
 
   progress.stage = "customer_lookup";
-  if (!hasCustomerScope(scope)) throw new LookupError("customer_data_unavailable", 403);
+  if (!hasCustomerScope(scope)) throw new LookupError("customer_data_unavailable", 403, { reason: "scope_not_granted" });
   const email = await fetchCustomerEmail(admin, identity.customerGid);
 
   progress.stage = "save";
