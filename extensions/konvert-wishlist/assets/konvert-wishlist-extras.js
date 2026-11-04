@@ -769,11 +769,26 @@
     return parsed.querySelector('.shopify-section') || parsed.body || null;
   }
 
-  // Replaces the content of an existing section wrapper. Returns false when there is nothing to replace.
+  // A rendered section is only used when it really is markup. Shopify answers a section it could not render
+  // with null or an empty string, and putting that into the page would blank a drawer that was fine.
+  function usableSection(html) {
+    return typeof html === 'string' && /<[a-z][^>]*>/i.test(html);
+  }
+
+  function usableSections(rendered) {
+    var usable = {};
+    Object.keys(rendered || {}).forEach(function (id) {
+      if (usableSection(rendered[id])) usable[id] = rendered[id];
+    });
+    return usable;
+  }
+
+  // Replaces the content of an existing section wrapper, and only with content. Returns false when there is
+  // nothing to replace or nothing to replace it with.
   function swapSection(id, html) {
     var wrapper = document.getElementById(SECTION_PREFIX + id);
-    var fragment = wrapper && typeof html === 'string' && html ? sectionFragment(html) : null;
-    if (!wrapper || !fragment) return false;
+    var fragment = wrapper && usableSection(html) ? sectionFragment(html) : null;
+    if (!wrapper || !fragment || !String(fragment.innerHTML || '').trim()) return false;
     wrapper.innerHTML = fragment.innerHTML;
     return true;
   }
@@ -788,41 +803,62 @@
       });
   }
 
-  // Dawn's drawer shows `.drawer__inner.is-empty` while the cart is empty.
-  // true = still shows the empty state, false = does not, null = no such drawer to look at.
-  function drawerShowsEmpty() {
+  // Does the theme's drawer (Dawn-style <cart-drawer>) show what is in the cart?
+  //   true  = it lists a product of the cart; false = blank, still the empty state, or lists none of them;
+  //   null  = there is no such drawer to look at (any other theme): unknown, never reported as a failure.
+  function drawerShowsCart(cart) {
     var drawer = themeDrawer();
-    if (!drawer) return null;
+    if (!drawer || !(Number(cart && cart.item_count) > 0)) return null;
     var inner = drawer.querySelector('.drawer__inner');
-    return Boolean(inner && inner.classList.contains('is-empty'));
+    if (inner && inner.classList.contains('is-empty')) return false;
+    var shown = String(drawer.textContent || '').toLowerCase();
+    if (!shown.trim()) return false;
+    return (cart.items || []).some(function (entry) {
+      var title = String(entry.product_title || '').toLowerCase();
+      return Boolean(title) && shown.indexOf(title) !== -1;
+    });
+  }
+
+  // Puts rendered sections into the page. Returns how it was done, or null when nothing could be used.
+  function applySections(rendered, added) {
+    var usable = usableSections(rendered);
+    var drawer = themeDrawer();
+    // The theme's own method gets the response shape it expects: BOTH of its sections, with the drawer's own
+    // container inside. Anything less would make it empty the drawer and then fail to fill it.
+    if (drawer && usable['cart-drawer'] && usable['cart-icon-bubble'] && /id=["']CartDrawer["']/.test(usable['cart-drawer'])) {
+      try {
+        var line = added && added.items && added.items[0];
+        drawer.renderContents({ id: line ? line.id : added && added.id, sections: usable });
+        return 'renderContents';
+      } catch (error) {
+        warn('theme drawer renderContents failed', error);
+      }
+    }
+    var swapped = 0;
+    Object.keys(usable).forEach(function (id) {
+      if (swapSection(id, usable[id])) swapped += 1;
+    });
+    return swapped ? 'sections' : null;
   }
 
   // Resolves { done, via }. Never rejects: the cart is already updated, only the preview can fail.
+  // Order: the sections that came with the add; if the drawer still does not show the cart, one fresh request for
+  // them; if it still does not, the customer is told (done: false) instead of being shown a plain success.
   function refreshThemeCart(cart, added) {
     var ids = cartSectionIds();
-    var sections = added && added.sections ? added.sections : null;
-    var ready = sections || !ids.length ? Promise.resolve(sections) : fetchSections(ids);
+    var first = added && added.sections ? added.sections : null;
+    var ready = first || !ids.length ? Promise.resolve(first) : fetchSections(ids);
     return ready
       .then(function (rendered) {
-        rendered = rendered || {};
-        cartDebug('sections', { asked: ids, received: Object.keys(rendered) });
-        var drawer = themeDrawer();
-        var via = null;
-        if (drawer && rendered['cart-drawer'] && rendered['cart-icon-bubble']) {
-          try {
-            drawer.renderContents({ id: added && added.id, sections: rendered });
-            via = 'renderContents';
-          } catch (error) {
-            warn('theme drawer renderContents failed', error);
-          }
-        }
-        if (!via) {
-          var swapped = 0;
-          Object.keys(rendered).forEach(function (id) {
-            if (swapSection(id, rendered[id])) swapped += 1;
-          });
-          if (swapped) via = 'sections';
-        }
+        cartDebug('sections', { asked: ids, received: Object.keys(rendered || {}) });
+        var via = applySections(rendered, added);
+        if (drawerShowsCart(cart) !== false || !ids.length) return via;
+        // Only the drawer is judged here. One more, fresh, request: the first answer was missing, empty or stale.
+        return fetchSections(ids).then(function (again) {
+          return applySections(again, added) || via;
+        });
+      })
+      .then(function (via) {
         if (!via) {
           try {
             if (typeof publish === 'function' && typeof PUB_SUB_EVENTS !== 'undefined' && PUB_SUB_EVENTS.cartUpdate) {
@@ -838,11 +874,10 @@
         } catch (error) {
           /* CustomEvent unavailable */
         }
-        // A drawer that still says "empty" while the cart has items is a refresh that did not work.
-        var stale = Number(cart && cart.item_count) > 0 && drawerShowsEmpty() === true;
-        if (stale) warn('theme cart drawer still shows the empty state after the cart changed', { message: 'via ' + (via || 'none') });
-        cartDebug('refreshed', { via: via, stale: stale });
-        return { done: !stale, via: via };
+        var shows = drawerShowsCart(cart);
+        if (shows === false) warn('theme cart drawer does not show the cart after the add', { message: 'via ' + (via || 'none') });
+        cartDebug('refreshed', { via: via, shows: shows });
+        return { done: shows !== false, via: via };
       })
       .catch(function (error) {
         warn('cart preview refresh failed', error);
@@ -1229,8 +1264,31 @@
     row.refreshQuantity();
   }
 
-  // Add to cart for one row, then (only after Shopify confirmed the cart) remove
-  // that row's product from the wishlist.
+  // One product, end to end: cart add, then (only after Shopify confirmed the cart) the wishlist removal.
+  // Resolves one of
+  //   { outcome: 'removed', cart }  added, and gone from the wishlist
+  //   { outcome: 'kept',    cart }  added, but the removal failed: row.pendingRemoval is set so the cart is never
+  //                                 added to again, only the removal is retried
+  //   { outcome: 'failed',  error } the cart refused it: nothing was added and the wishlist is untouched
+  function addRowAndRemove(row) {
+    return addToCart([lineFor(row)]).then(
+      function (cart) {
+        return recordWishlistCartAdds([row])
+          .then(function () {
+            return removeOne(row);
+          })
+          .then(function (removed) {
+            if (!removed) row.pendingRemoval = true;
+            return { outcome: removed ? 'removed' : 'kept', cart: cart };
+          });
+      },
+      function (error) {
+        return { outcome: 'failed', error: error };
+      }
+    );
+  }
+
+  // Add to cart for one row.
   //   - row.busy blocks double clicks and duplicate submissions.
   //   - A failed or unconfirmed cart add leaves the wishlist untouched.
   //   - If the cart add worked but the removal failed, the cart is never added
@@ -1247,37 +1305,91 @@
     button.disabled = true;
     button.textContent = text('adding', 'Adding…');
 
-    addToCart([lineFor(row)]).then(
-      function (cart) {
-        return recordWishlistCartAdds([row]).then(function () {
-          return removeOne(row);
-        }).then(function (removed) {
-          if (removed) {
-            kw.showToast(addedMessage(cart), false);
-            afterRemoval();
-            return;
-          }
-          row.pendingRemoval = true;
-          setBusy(row, false);
-          setAction(row, 'retry');
+    addRowAndRemove(row).then(function (result) {
+      if (result.outcome === 'removed') {
+        kw.showToast(addedMessage(result.cart), false);
+        afterRemoval();
+        return;
+      }
+      if (result.outcome === 'kept') {
+        setBusy(row, false);
+        setAction(row, 'retry');
+        kw.showToast(
+          text('cartAddedRemoveFailed', 'Added to your cart, but we could not remove it from your wishlist. You can try removing it again.'),
+          false
+        );
+        return;
+      }
+      cartFailed(result.error);
+      button.textContent = label;
+      button.disabled = false;
+      setBusy(row, false);
+      // Stock may have changed since the page loaded: refresh the limit silently.
+      if (result.error && result.error.status === 422) loadInventory([row]);
+    });
+  }
+
+  // "Add selected to cart": each selected product goes through the same single-product flow, one after the other
+  // (Shopify's cart takes one request at a time, and each outcome is known on its own). A product leaves the
+  // wishlist only after ITS add was confirmed; one that was refused stays, selected, so the customer can see what
+  // is left. The table, the count, the selection and the empty state are refreshed once, at the end.
+  var bulkRunning = false;
+  function addSelectedToCart(buyable, onDone) {
+    if (bulkRunning) return;
+    bulkRunning = true;
+    buyable.forEach(function (row) {
+      setBusy(row, true);
+    });
+    var results = [];
+    buyable
+      .reduce(function (chain, row) {
+        return chain.then(function () {
+          return addRowAndRemove(row).then(function (result) {
+            results.push({ row: row, result: result });
+          });
+        });
+      }, Promise.resolve())
+      .then(function () {
+        var refused = results.filter(function (entry) {
+          return entry.result.outcome === 'failed';
+        });
+        var kept = results.filter(function (entry) {
+          return entry.result.outcome === 'kept';
+        });
+        var added = results.filter(function (entry) {
+          return entry.result.outcome !== 'failed';
+        });
+        results.forEach(function (entry) {
+          if (entry.result.outcome === 'removed') return; // its row is gone
+          setBusy(entry.row, false);
+          if (entry.result.outcome === 'kept') setAction(entry.row, 'retry');
+        });
+        if (refused.length === results.length) {
+          cartFailed(refused[0].result.error);
+        } else if (refused.length) {
+          kw.showToast(text('bulkPartial', 'Some products could not be added to your cart and are still in your wishlist.'), false);
+        } else if (kept.length) {
           kw.showToast(
-            text(
-              'cartAddedRemoveFailed',
-              'Added to your cart, but we could not remove it from your wishlist. You can try removing it again.'
-            ),
+            text('cartAddedRemoveFailed', 'Added to your cart, but we could not remove it from your wishlist. You can try removing it again.'),
             false
           );
-        });
-      },
-      function (error) {
-        cartFailed(error);
-        button.textContent = label;
-        button.disabled = false;
-        setBusy(row, false);
-        // Stock may have changed since the page loaded: refresh the limit silently.
-        if (error && error.status === 422) loadInventory([row]);
-      }
-    );
+        } else {
+          kw.showToast(addedMessage(added[added.length - 1].result.cart), false);
+        }
+        var stock = refused
+          .filter(function (entry) {
+            return entry.result.error && entry.result.error.status === 422;
+          })
+          .map(function (entry) {
+            return entry.row;
+          });
+        if (stock.length) loadInventory(stock);
+      })
+      .then(function () {
+        bulkRunning = false;
+        afterRemoval();
+        onDone();
+      });
   }
 
   // Retries only the wishlist removal for a product that is already in the cart.
@@ -1417,6 +1529,7 @@
     remove.type = 'button';
 
     add.addEventListener('click', function () {
+      if (bulkRunning) return;
       var buyable = selectedRows().filter(function (row) {
         return row.purchasable && row.variant && !row.busy && !row.pendingRemoval;
       });
@@ -1434,27 +1547,10 @@
       var label = add.textContent;
       add.disabled = true;
       add.textContent = text('adding', 'Adding…');
-      // A row's own Add to cart must not fire while the same product is in this request.
-      buyable.forEach(function (row) {
-        setBusy(row, true);
+      addSelectedToCart(buyable, function () {
+        add.textContent = label;
+        updateBulk();
       });
-      addToCart(buyable.map(lineFor))
-        .then(function (cart) {
-          return recordWishlistCartAdds(buyable).then(function () {
-            kw.showToast(addedMessage(cart), false);
-          });
-        })
-        .catch(function (error) {
-          cartFailed(error);
-          if (error && error.status === 422) loadInventory(buyable);
-        })
-        .then(function () {
-          buyable.forEach(function (row) {
-            setBusy(row, false);
-          });
-          add.textContent = label;
-          updateBulk();
-        });
     });
     remove.addEventListener('click', function () {
       removeRows(selectedRows());

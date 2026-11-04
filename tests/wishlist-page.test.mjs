@@ -205,7 +205,8 @@ async function mount({ loggedIn = true, openFails = false, backend, cart = {}, i
     node.renderContents = (response) => {
       drawer.rendered.push(response);
       if (drawer.throws) throw new Error("render failed");
-      inner.classList.remove("is-empty");
+      inner.classList.remove("is-empty"); // the real method does this first, whatever happens next
+      inner.textContent = String(response.sections["cart-drawer"] ?? "").replace(/<[^>]+>/g, " ");
     };
     drawer.node = node;
     body.appendChild(node);
@@ -255,6 +256,21 @@ async function mount({ loggedIn = true, openFails = false, backend, cart = {}, i
   };
 
   const clientItems = () => backend.items.map((i) => ({ productId: i.productId, variantId: i.variantId, title: i.title, handle: i.handle }));
+  // What Shopify's Section Rendering API answers for a section, from the cart as it is right now.
+  //   drawer.answer(id, served) can return null / "" / any markup for the nth answer served, to simulate a section
+  //   Shopify could not render or a stale one.
+  let served = 0;
+  function renderSection(id) {
+    const n = (served += 1);
+    if (drawer?.answer) {
+      const custom = drawer.answer(id, n);
+      if (custom !== undefined) return custom;
+    }
+    const titles = cartItems.map((line) => line.product_title).join(" ");
+    if (id === "cart-drawer") return `<div id="shopify-section-cart-drawer"><div id="CartDrawer">${titles}</div></div>`;
+    if (id === "cart-icon-bubble") return `<div id="shopify-section-cart-icon-bubble"><span>${cartItems.reduce((sum, line) => sum + line.quantity, 0)}</span></div>`;
+    return `<div id="shopify-section-${id}"><p>${id}</p></div>`;
+  }
   async function fetchStub(url, init = {}) {
     if (url === "/apps/konvert-notify/api/wishlist") {
       const method = init.method || "GET";
@@ -306,17 +322,17 @@ async function mount({ loggedIn = true, openFails = false, backend, cart = {}, i
       const payload = JSON.parse(init.body);
       log.cart.push(payload);
       log.calls.push(`POST ${url}`);
-      if (state.cart.fail) {
-        return { ok: false, status: state.cart.failStatus ?? 422, json: async () => ({ status: 422, message: "Cart Error", description: state.cart.fail }) };
+      if (state.cart.fail || payload.items.some((line) => state.cart.failVariants?.includes(line.id))) {
+        return { ok: false, status: state.cart.failStatus ?? 422, json: async () => ({ status: 422, message: "Cart Error", description: state.cart.fail ?? "Sold out" }) };
       }
-      if (!state.cart.unconfirmed) for (const line of payload.items) cartItems.push({ variant_id: line.id, quantity: line.quantity });
-      const sections = payload.sections && !drawer?.noSections ? Object.fromEntries(payload.sections.split(",").map((id) => [id, `<div id="shopify-section-${id}"><p>${id}</p></div>`])) : undefined;
+      if (!state.cart.unconfirmed) for (const line of payload.items) cartItems.push({ variant_id: line.id, quantity: line.quantity, product_title: Object.values(PRODUCTS).find((product) => product.variants.some((variant) => variant.id === line.id))?.title ?? "" });
+      const sections = payload.sections && !drawer?.noSections ? Object.fromEntries(payload.sections.split(",").map((id) => [id, renderSection(id)])) : undefined;
       return { ok: true, status: 200, json: async () => ({ items: payload.items, ...(sections ? { sections } : {}) }) };
     }
     if (url.includes("?sections=")) {
       log.calls.push(`GET ${url}`);
       const ids = decodeURIComponent(url.split("?sections=")[1]).split(",");
-      return { ok: true, json: async () => Object.fromEntries(ids.map((id) => [id, `<div id="shopify-section-${id}"><p>${id}</p></div>`])) };
+      return { ok: true, json: async () => Object.fromEntries(ids.map((id) => [id, renderSection(id)])) };
     }
     if (url.endsWith("cart.js")) {
       log.calls.push(`GET ${url}`);
@@ -1136,18 +1152,30 @@ test("the product copy kept in the tab expires: stale stock data is refetched, f
   assert.equal(text(legacy.rows()[0], ".kw-stock"), "Out of stock");
 });
 
-// ---- cart drawer / theme cart refresh ----------------------------------------------------------
-// Simulated only: a stub DOM and a stub Shopify Ajax Cart / Section Rendering API. These prove the
-// script's decisions (which request it sends, which theme method it calls, what it tells the
-// customer). They cannot prove that a real theme draws the drawer correctly: that needs the store.
+// ---- cart drawer / theme cart refresh, and Add selected to cart ----------------------------------------------------
+// Simulated only: a stub DOM and a stub Shopify Ajax Cart / Section Rendering API. These prove the script's decisions
+// (which request it sends, which theme method it calls with what, what stays in the wishlist, what the customer is told).
+// They cannot prove that a real theme draws its drawer correctly: that needs the store.
 const clickAdd = async (page, index = 0) => {
   await page.rows()[index].find(".kw-btn-cart").click();
   await tick();
   await tick();
 };
 const posts = (page) => page.log.calls.filter((call) => call.startsWith("POST"));
+const sectionGets = (page) => page.log.calls.filter((call) => call.startsWith("GET /?sections=") || call.startsWith("GET /fr/?sections="));
+const drawerText = (drawer) => drawer.node.textContent;
+const removedIds = (page) => page.log.requests.filter((r) => r.body.op === "remove").map((r) => r.body.productId);
+async function selectRows(page, indexes) {
+  await page.select.click();
+  const rows = page.rows();
+  for (const index of indexes) rows[index].find(".kw-check").checked = true;
+  await rows[indexes[0]].find(".kw-check").fire("change");
+  const [add, remove] = page.pageBody.find(".kw-bulk").findAll("button");
+  return { add, remove, count: page.pageBody.find(".kw-bulk__count") };
+}
+const STALE_MARKUP = (id) => (id === "cart-drawer" ? '<div id="shopify-section-cart-drawer"><div id="CartDrawer">nothing here</div></div>' : undefined);
 
-test("cart: empty cart -> add -> the theme drawer is rendered once from the sections of that add, and its empty state is gone", async () => {
+test("cart: empty cart -> add -> the theme drawer is rendered once, with the response it expects, and shows the product", async () => {
   const drawer = { rendered: [] };
   const page = await mount({ backend: { items: [SNOWBOARD, GIFT] }, drawer });
   assert.equal(drawer.node.find(".drawer__inner").has("is-empty"), true, "the drawer starts empty");
@@ -1155,19 +1183,23 @@ test("cart: empty cart -> add -> the theme drawer is rendered once from the sect
 
   assert.deepEqual(page.log.cart, [{ items: [{ id: 11, quantity: 1 }], sections: "cart-drawer,cart-icon-bubble", sections_url: "/" }], "one add that also asks for the drawer sections, rendered for the shop root");
   assert.equal(drawer.rendered.length, 1, "rendered exactly once");
-  assert.deepEqual(Object.keys(drawer.rendered[0].sections), ["cart-drawer", "cart-icon-bubble"]);
+  assert.deepEqual(Object.keys(drawer.rendered[0].sections), ["cart-drawer", "cart-icon-bubble"], "both sections the theme method reads");
+  assert.match(drawer.rendered[0].sections["cart-drawer"], /id="CartDrawer"/);
   assert.equal(drawer.node.find(".drawer__inner").has("is-empty"), false, "no stale empty state");
+  assert.match(drawerText(drawer), /Snowboard/, "the drawer shows the product that was just added");
   assert.equal(posts(page).length, 1, "the product is submitted once");
   assert.deepEqual(page.log.toasts, ["Added to cart"]);
 });
 
-test("cart: existing cart -> add another product -> the drawer is rendered again and the cart holds both", async () => {
+test("cart: existing cart -> add another product -> the drawer shows both, and the earlier line is kept", async () => {
   const drawer = { rendered: [] };
   const page = await mount({ backend: { items: [SNOWBOARD, SHIRT_SAVED] }, drawer });
   await clickAdd(page, 0);
   await clickAdd(page, 0); // the first row left the wishlist, so row 0 is now the shirt
   assert.equal(drawer.rendered.length, 2);
-  assert.deepEqual(page.cartItems.map((line) => String(line.variant_id)), ["11", "41"], "the earlier line is kept");
+  assert.deepEqual(page.cartItems.map((line) => String(line.variant_id)), ["11", "41"]);
+  assert.match(drawerText(drawer), /Snowboard/);
+  assert.match(drawerText(drawer), /Shirt/);
   assert.deepEqual(page.log.toasts, ["Added to cart", "Added to cart"]);
 });
 
@@ -1186,6 +1218,7 @@ test("cart: rapid clicks on one product submit it once; clicks on two products a
   const secondPost = calls.map((call, i) => (call.startsWith("POST") ? i : -1)).filter((i) => i >= 0)[1];
   assert.ok(secondPost > firstCartRead, "the second add starts only after the first add was confirmed and its drawer refreshed");
   assert.equal(drawer.rendered.length, 2, "one drawer render per add, never two for the same add");
+  assert.match(drawerText(drawer), /Snowboard.*Shirt|Shirt.*Snowboard/, "the final drawer reflects the whole cart");
 });
 
 test("cart: a rejected add never renders the drawer, reports the failure and keeps the wishlist", async () => {
@@ -1197,21 +1230,52 @@ test("cart: a rejected add never renders the drawer, reports the failure and kee
   assert.ok(!page.log.toasts.includes("Added to cart"), "no success message");
 });
 
-test("cart: the add is accepted but the theme drawer render fails -> the customer is told the preview could not refresh", async () => {
+test("cart: sections missing or null -> the working drawer is never blanked, nothing is added twice, and the customer is told", async () => {
+  const drawer = { rendered: [], answer: () => null }; // Shopify could not render either section, on every request
+  const page = await mount({ backend: { items: [SNOWBOARD] }, drawer });
+  await clickAdd(page);
+  assert.equal(drawer.rendered.length, 0, "the theme method is not called with nothing to render");
+  assert.equal(drawer.node.find(".drawer__inner").has("is-empty"), true, "the drawer is left exactly as it was");
+  assert.equal(sectionGets(page).length, 1, "one fresh request for the sections was tried");
+  assert.equal(posts(page).length, 1, "and the product was not added again to get it");
+  assert.equal(page.rows().length, 0, "the confirmed add still leaves the wishlist");
+  assert.deepEqual(page.log.toasts, ["Added to your cart, but the cart preview could not refresh. Open your cart to review it."]);
+});
+
+test("cart: an empty or blank drawer section is ignored, and the fresh request fills the drawer", async () => {
+  const drawer = { rendered: [], answer: (id, n) => (n <= 2 ? (id === "cart-drawer" ? "" : "   ") : undefined) }; // the add's own answer is blank
+  const page = await mount({ backend: { items: [SNOWBOARD] }, drawer });
+  await clickAdd(page);
+  assert.equal(drawer.rendered.length, 1, "rendered once, from the valid answer only");
+  assert.match(drawerText(drawer), /Snowboard/);
+  assert.equal(sectionGets(page).length, 1);
+  assert.equal(posts(page).length, 1);
+  assert.deepEqual(page.log.toasts, ["Added to cart"]);
+});
+
+test("cart: a stale drawer render that does not list the added product is retried once, then reported, never claimed as success", async () => {
+  const drawer = { rendered: [], answer: STALE_MARKUP };
+  const page = await mount({ backend: { items: [SNOWBOARD] }, drawer });
+  await clickAdd(page);
+  assert.equal(drawer.rendered.length, 2, "the first render, and one retry from a fresh request");
+  assert.equal(posts(page).length, 1);
+  assert.deepEqual(page.log.toasts, ["Added to your cart, but the cart preview could not refresh. Open your cart to review it."]);
+});
+
+test("cart: the add is accepted but the theme drawer render throws -> the customer is told the preview could not refresh", async () => {
   const drawer = { rendered: [], throws: true };
   const page = await mount({ backend: { items: [SNOWBOARD] }, drawer });
   await clickAdd(page);
   assert.equal(posts(page).length, 1, "the product was added once and is not retried");
   assert.equal(page.rows().length, 0, "the confirmed add still leaves the wishlist");
-  assert.deepEqual(page.log.toasts, ["Added to your cart, but the cart preview could not refresh. Open your cart to review it."], "never a plain success while the drawer still says empty");
+  assert.deepEqual(page.log.toasts, ["Added to your cart, but the cart preview could not refresh. Open your cart to review it."]);
 });
 
 test("cart: an add response without sections is followed by one request for them, then the drawer is rendered", async () => {
   const drawer = { rendered: [], noSections: true };
   const page = await mount({ backend: { items: [SNOWBOARD] }, drawer });
   await clickAdd(page);
-  const sectionRequests = page.log.calls.filter((call) => call.startsWith("GET /?sections="));
-  assert.deepEqual(sectionRequests, ["GET /?sections=cart-drawer%2Ccart-icon-bubble"]);
+  assert.deepEqual(sectionGets(page), ["GET /?sections=cart-drawer%2Ccart-icon-bubble"]);
   assert.equal(drawer.rendered.length, 1);
   assert.deepEqual(page.log.toasts, ["Added to cart"]);
 });
@@ -1224,10 +1288,9 @@ test("cart: a locale-prefixed storefront uses its own cart and section URLs", as
   assert.deepEqual(page.log.calls.slice(0, 3), ["POST /fr/cart/add.js", "GET /fr/cart.js", "GET /fr/?sections=cart-drawer%2Ccart-icon-bubble"]);
 });
 
-test("cart: a theme without renderContents has its cart sections replaced in place, never appended", async () => {
+test("cart: a theme without renderContents has its cart sections replaced in place, never appended, and never with nothing", async () => {
   const wrappers = ["cart-drawer-custom", "header"]; // only the first one is cart related
-  const drawer = null;
-  const page = await mount({ backend: { items: [SNOWBOARD] }, drawer, wrappers });
+  const page = await mount({ backend: { items: [SNOWBOARD] }, drawer: null, wrappers });
   const target = page.wrappers["cart-drawer-custom"];
   const before = target.children.length;
   await clickAdd(page);
@@ -1236,6 +1299,11 @@ test("cart: a theme without renderContents has its cart sections replaced in pla
   assert.equal(target.children.length, before, "no element was added");
   assert.equal(page.wrappers.header.innerHTML, undefined, "an unrelated section is left alone");
   assert.deepEqual(page.log.toasts, ["Added to cart"]);
+
+  const blanked = await mount({ backend: { items: [SNOWBOARD] }, drawer: { rendered: [], answer: () => "", noSections: false }, wrappers });
+  blanked.wrappers["cart-drawer-custom"].innerHTML = "<p>working markup</p>";
+  await clickAdd(blanked);
+  assert.equal(blanked.wrappers["cart-drawer-custom"].innerHTML, "<p>working markup</p>", "an empty answer never replaces working markup");
 });
 
 test("cart: a theme with no cart sections keeps the original request and still fires the plain event", async () => {
@@ -1243,6 +1311,87 @@ test("cart: a theme with no cart sections keeps the original request and still f
   await clickAdd(page);
   assert.equal(JSON.stringify(page.log.cart), JSON.stringify([{ items: [{ id: 11, quantity: 1 }] }]), "nothing extra is asked of such a theme");
   assert.deepEqual(page.log.toasts, ["Added to cart"]);
+});
+
+// ---- Add selected to cart ------------------------------------------------------------------------------------------
+test("bulk: every selected product is added, then removed from the wishlist; count, selection and empty state follow", async () => {
+  const drawer = { rendered: [] };
+  const page = await mount({ backend: { items: [SNOWBOARD, SHIRT_SAVED] }, drawer });
+  const { add } = await selectRows(page, [0, 1]);
+  await add.click();
+  await tick();
+  await tick();
+  await tick();
+
+  assert.equal(posts(page).length, 2, "one add per product, each confirmed on its own");
+  assert.deepEqual(removedIds(page), ["1", "4"], "each product left the wishlist after its own add");
+  assert.equal(page.rows().length, 0);
+  assert.equal(page.items.size, 0);
+  assert.ok(page.pageBody.find(".kw-empty"), "the empty state is shown");
+  assert.match(drawerText(drawer), /Snowboard/);
+  assert.match(drawerText(drawer), /Shirt/, "the final drawer holds the whole bulk add");
+  assert.deepEqual(page.log.toasts, ["Added to cart"]);
+});
+
+test("bulk: a product the cart refuses stays in the wishlist and stays selected; the others are added and removed", async () => {
+  const drawer = { rendered: [] };
+  const page = await mount({ backend: { items: [SNOWBOARD, SHIRT_SAVED] }, drawer, cart: { failVariants: [11], failStatus: 422 } });
+  const { add, count } = await selectRows(page, [0, 1]);
+  await add.click();
+  await tick();
+  await tick();
+  await tick();
+
+  assert.deepEqual(page.cartItems.map((line) => String(line.variant_id)), ["41"], "only the accepted product is in the cart");
+  assert.deepEqual(removedIds(page), ["4"], "only the accepted product was removed from the wishlist");
+  assert.equal(page.rows().length, 1);
+  assert.equal(text(page.rows()[0], ".kw-row__title"), "Snowboard", "the refused product is still listed");
+  assert.equal(page.items.size, 1);
+  assert.equal(count.textContent, "1 selected", "the refused product is still selected");
+  assert.match(drawerText(drawer), /Shirt/);
+  assert.equal(page.log.toasts.at(-1), "Some products could not be added to your cart and are still in your wishlist.");
+  assert.equal(page.rows()[0].find(".kw-btn-cart").disabled, false, "it can be tried again");
+});
+
+test("bulk: when every product is refused nothing leaves the wishlist and no success is shown", async () => {
+  const drawer = { rendered: [] };
+  const page = await mount({ backend: { items: [SNOWBOARD, SHIRT_SAVED] }, drawer, cart: { fail: "Sold out", failStatus: 422 } });
+  const { add } = await selectRows(page, [0, 1]);
+  await add.click();
+  await tick();
+  await tick();
+  assert.equal(removedIds(page).length, 0);
+  assert.equal(page.rows().length, 2);
+  assert.equal(drawer.rendered.length, 0);
+  assert.ok(!page.log.toasts.includes("Added to cart"));
+});
+
+test("bulk: a product added to the cart whose removal fails is never added again, and offers a retry of the removal only", async () => {
+  const page = await mount({ backend: { items: [SNOWBOARD, SHIRT_SAVED] }, removeError: true });
+  const { add } = await selectRows(page, [0, 1]);
+  await add.click();
+  await tick();
+  await tick();
+  await tick();
+  assert.equal(posts(page).length, 2);
+  assert.equal(page.rows().length, 2, "both stay listed, because the server did not confirm the removal");
+  assert.equal(page.log.toasts.at(-1), "Added to your cart, but we could not remove it from your wishlist. You can try removing it again.");
+  await add.click();
+  await tick();
+  await tick();
+  assert.equal(posts(page).length, 2, "a second click adds nothing: those rows are waiting only for their removal");
+});
+
+test("bulk: clicking Add selected repeatedly sends each product once", async () => {
+  const drawer = { rendered: [] };
+  const page = await mount({ backend: { items: [SNOWBOARD, SHIRT_SAVED] }, drawer });
+  const { add } = await selectRows(page, [0, 1]);
+  await Promise.all([add.click(), add.click(), add.click()]);
+  await tick();
+  await tick();
+  await tick();
+  assert.equal(posts(page).length, 2);
+  assert.deepEqual(page.cartItems.map((line) => String(line.variant_id)), ["11", "41"]);
 });
 
 test("Notify Me failures that used to share one generic message now say what they are, and are never shown as success", async () => {

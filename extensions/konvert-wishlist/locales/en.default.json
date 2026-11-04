@@ -49,6 +49,7 @@
     "line_total": "Subtotal",
     "line_total_hint": "Estimated subtotal (price × quantity). Discounts, taxes and shipping are applied in the cart and at checkout.",
     "cart_unconfirmed": "We could not confirm that this was added to your cart. Please check your cart.",
+    "bulk_partial": "Some products could not be added to your cart and are still in your wishlist.",
     "cart_preview_stale": "Added to your cart, but the cart preview could not refresh. Open your cart to review it.",
     "invalid_variant": "This product option cannot be added from here. Please open the product page.",
     "invalid_quantity": "Please enter a valid quantity.",
