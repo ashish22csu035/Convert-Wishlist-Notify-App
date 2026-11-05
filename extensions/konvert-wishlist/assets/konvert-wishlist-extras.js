@@ -735,7 +735,7 @@
   function cartDebug(stage, info) {
     try {
       var on = (window.localStorage && window.localStorage.getItem('kw_debug') === '1') || /[?&]kw_debug=1/.test(window.location.search || '');
-      if (on && window.console) console.info('[konvert-wishlist] cart ' + stage, info === undefined ? '' : info);
+      if (on && window.console) console.info('[konvert-wishlist] cart ' + stage, typeof info === 'function' ? info() : info === undefined ? '' : info);
     } catch (error) {
       /* diagnostics only */
     }
@@ -810,13 +810,42 @@
     var drawer = themeDrawer();
     if (!drawer || !(Number(cart && cart.item_count) > 0)) return null;
     var inner = drawer.querySelector('.drawer__inner');
-    if (inner && inner.classList.contains('is-empty')) return false;
+    if (drawer.classList.contains('is-empty') || (inner && inner.classList.contains('is-empty'))) return false;
     var shown = String(drawer.textContent || '').toLowerCase();
     if (!shown.trim()) return false;
     return (cart.items || []).some(function (entry) {
       var title = String(entry.product_title || '').toLowerCase();
       return Boolean(title) && shown.indexOf(title) !== -1;
     });
+  }
+
+  // The drawer ELEMENT carries its own empty flag (Dawn: <cart-drawer class="drawer is-empty">, set when the page was
+  // rendered with an empty cart) and the theme's CSS lays the whole drawer out as "empty" while it is set
+  // (cart-drawer.is-empty .drawer__inner { display: grid; grid-template-rows: 1fr; align-items: center }). renderContents()
+  // swaps in the new items but only clears the flag on the inner element it replaces: it is the theme's product form that
+  // clears the flag on the element itself after an add. A path that calls renderContents() alone, like this one, must do the
+  // same, or the first add into an empty cart renders the items and the subtotal inside a drawer still styled as empty (no
+  // list visible, footer still showing). Only ever removes the flag, and only when the cart has items.
+  function clearDrawerEmptyState(cart) {
+    var drawer = themeDrawer();
+    if (drawer && Number(cart && cart.item_count) > 0 && drawer.classList.contains('is-empty')) drawer.classList.remove('is-empty');
+  }
+
+  // Facts, no customer data: enough to tell from a live browser console why a drawer looks blank (?kw_debug=1 only).
+  function drawerSnapshot() {
+    var drawer = themeDrawer();
+    if (!drawer) return null;
+    var inner = drawer.querySelector('.drawer__inner');
+    var rows = drawer.querySelectorAll('.cart-item');
+    var first = rows[0];
+    var style = first && window.getComputedStyle ? window.getComputedStyle(first) : null;
+    return {
+      drawerClass: String(drawer.className),
+      innerClass: inner ? String(inner.className) : null,
+      itemRows: rows.length,
+      firstRow: style ? { display: style.display, visibility: style.visibility, opacity: style.opacity, height: style.height } : null,
+      textLength: String(drawer.textContent || '').trim().length
+    };
   }
 
   // Puts rendered sections into the page. Returns how it was done, or null when nothing could be used.
@@ -852,10 +881,16 @@
       .then(function (rendered) {
         cartDebug('sections', { asked: ids, received: Object.keys(rendered || {}) });
         var via = applySections(rendered, added);
+        if (via === 'renderContents') clearDrawerEmptyState(cart);
+        cartDebug('after render', function () {
+          return { via: via, sections: Object.keys(rendered || {}).map(function (id) { return id + ':' + String((rendered || {})[id] || '').length; }), drawer: drawerSnapshot() };
+        });
         if (drawerShowsCart(cart) !== false || !ids.length) return via;
         // Only the drawer is judged here. One more, fresh, request: the first answer was missing, empty or stale.
         return fetchSections(ids).then(function (again) {
-          return applySections(again, added) || via;
+          var second = applySections(again, added);
+          if (second === 'renderContents') clearDrawerEmptyState(cart);
+          return second || via;
         });
       })
       .then(function (via) {
@@ -877,6 +912,16 @@
         var shows = drawerShowsCart(cart);
         if (shows === false) warn('theme cart drawer does not show the cart after the add', { message: 'via ' + (via || 'none') });
         cartDebug('refreshed', { via: via, shows: shows });
+        // Does the drawer still hold the cart once the theme's own asynchronous work has run?
+        if (window.requestAnimationFrame) {
+          window.requestAnimationFrame(function () {
+            window.requestAnimationFrame(function () {
+              cartDebug('settled', function () {
+                return { drawer: drawerSnapshot() };
+              });
+            });
+          });
+        }
         return { done: shows !== false, via: via };
       })
       .catch(function (error) {

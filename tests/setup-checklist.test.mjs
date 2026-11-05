@@ -198,7 +198,7 @@ async function mountChecklist({ store = new Map(), shop = SHOP_A, appearanceSave
 test("it shows the header, the real progress, a checkmark or pending mark per step and the right statuses", async () => {
   fakeShopify([themeExt(block("wishlist-embed", "active", ["theme"]), block("wishlist-button", "available"))]);
   await mountChecklist({ appearanceSaved: true });
-  assert.equal(container.querySelector("h3").textContent, "Get started with Konvert");
+  assert.equal(container.querySelector("h3").textContent, "Get started with Konvert Wishlist And Notify");
   assert.match(container.textContent, /Complete these steps to enable Wishlist and Notify Me on your storefront\./);
   assert.match(container.textContent, /2 of 3 steps completed/);
   assert.equal(container.querySelector('[role="progressbar"]').getAttribute("aria-valuenow"), "2");
@@ -348,7 +348,7 @@ test("dismissing is saved and persists; while setup is incomplete it can be show
   assert.equal(container.querySelector("h3"), null, "still dismissed after reload");
   await click(byText("button", "Show setup guide"));
   assert.deepEqual(reloaded.posted, ["reopen"]);
-  assert.equal(container.querySelector("h3").textContent, "Get started with Konvert");
+  assert.equal(container.querySelector("h3").textContent, "Get started with Konvert Wishlist And Notify");
   await unmount();
 });
 
@@ -366,7 +366,7 @@ test("two shops keep separate dismissals", async () => {
   await click(label("Dismiss setup guide"));
   await unmount();
   await mountChecklist({ store, shop: "beta-store.myshopify.com" });
-  assert.equal(container.querySelector("h3").textContent, "Get started with Konvert");
+  assert.equal(container.querySelector("h3").textContent, "Get started with Konvert Wishlist And Notify");
   await unmount();
 });
 

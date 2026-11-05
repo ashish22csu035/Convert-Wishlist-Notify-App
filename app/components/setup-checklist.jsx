@@ -90,7 +90,7 @@ export function SetupChecklist({ setup }) {
     <section className="kv-card kv-setup" aria-labelledby="kv-setup-title">
       <div className="kv-setup-head">
         <div>
-          <h3 id="kv-setup-title">Get started with Konvert</h3>
+          <h3 id="kv-setup-title">Get started with Konvert Wishlist And Notify</h3>
           <p>Complete these steps to enable Wishlist and Notify Me on your storefront.</p>
         </div>
         <div className="kv-setup-controls">

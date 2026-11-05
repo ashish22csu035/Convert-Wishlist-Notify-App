@@ -201,7 +201,11 @@ async function mount({ loggedIn = true, openFails = false, backend, cart = {}, i
   if (drawer) {
     const node = new Dom("cart-drawer");
     const inner = node.appendChild(new Dom("div"));
-    inner.className = "drawer__inner is-empty";
+    // Dawn renders <cart-drawer class="drawer is-empty"> for an empty cart, and the theme's CSS lays the whole drawer out
+    // as "empty" while the ELEMENT has the class. renderContents() (below) clears only the inner one, as the real method does.
+    node.className = drawer.startsPopulated ? "drawer" : "drawer is-empty";
+    inner.className = drawer.startsPopulated ? "drawer__inner" : "drawer__inner is-empty";
+    if (drawer.startsPopulated) inner.textContent = "Shirt";
     node.renderContents = (response) => {
       drawer.rendered.push(response);
       if (drawer.throws) throw new Error("render failed");
@@ -220,6 +224,7 @@ async function mount({ loggedIn = true, openFails = false, backend, cart = {}, i
 
   const log = { requests: [], cart: [], calls: [], inventoryCalls: [], toasts: [], opens: [], notify: [], status: [], productFetches: [] };
   const cartItems = [];
+  if (drawer?.startsPopulated) cartItems.push({ variant_id: 41, quantity: 1, product_title: "Shirt" }); // a cart that already has a line
   const state = { inventory, cart, removeError };
 
   // every toast the real showToast puts on the page, in order (message only)
@@ -1185,7 +1190,8 @@ test("cart: empty cart -> add -> the theme drawer is rendered once, with the res
   assert.equal(drawer.rendered.length, 1, "rendered exactly once");
   assert.deepEqual(Object.keys(drawer.rendered[0].sections), ["cart-drawer", "cart-icon-bubble"], "both sections the theme method reads");
   assert.match(drawer.rendered[0].sections["cart-drawer"], /id="CartDrawer"/);
-  assert.equal(drawer.node.find(".drawer__inner").has("is-empty"), false, "no stale empty state");
+  assert.equal(drawer.node.find(".drawer__inner").has("is-empty"), false, "no stale empty state on the inner element");
+  assert.equal(drawer.node.has("is-empty"), false, "nor on the <cart-drawer> element itself, which is what the theme's CSS keys on");
   assert.match(drawerText(drawer), /Snowboard/, "the drawer shows the product that was just added");
   assert.equal(posts(page).length, 1, "the product is submitted once");
   assert.deepEqual(page.log.toasts, ["Added to cart"]);
@@ -1313,6 +1319,30 @@ test("cart: a theme with no cart sections keeps the original request and still f
   assert.deepEqual(page.log.toasts, ["Added to cart"]);
 });
 
+test("cart: the first add into an EMPTY cart clears the drawer element's own empty flag (renderContents does not), and a populated drawer is left as it is", async () => {
+  const empty = { rendered: [] };
+  const first = await mount({ backend: { items: [SNOWBOARD] }, drawer: empty });
+  assert.equal(empty.node.has("is-empty"), true, "the page was rendered with an empty cart");
+  await clickAdd(first);
+  assert.equal(empty.node.has("is-empty"), false, "otherwise the theme keeps laying the drawer out as empty: items and subtotal rendered, list not visible");
+
+  const populated = { rendered: [], startsPopulated: true };
+  const second = await mount({ backend: { items: [SNOWBOARD] }, drawer: populated });
+  assert.equal(populated.node.has("is-empty"), false);
+  await clickAdd(second);
+  assert.equal(populated.node.has("is-empty"), false, "never added back");
+  assert.match(drawerText(populated), /Snowboard/);
+  assert.deepEqual(second.cartItems.map((line) => String(line.variant_id)), ["41", "11"], "the existing line is kept");
+});
+
+test("cart: while the drawer element is still flagged empty after a render, the add is NOT reported as a plain success", async () => {
+  const stuck = { rendered: [], throws: true }; // the render fails, so nothing could clear the flag
+  const page = await mount({ backend: { items: [SNOWBOARD] }, drawer: stuck });
+  await clickAdd(page);
+  assert.equal(stuck.node.has("is-empty"), true);
+  assert.deepEqual(page.log.toasts, ["Added to your cart, but the cart preview could not refresh. Open your cart to review it."]);
+});
+
 // ---- Add selected to cart ------------------------------------------------------------------------------------------
 test("bulk: every selected product is added, then removed from the wishlist; count, selection and empty state follow", async () => {
   const drawer = { rendered: [] };
@@ -1330,6 +1360,7 @@ test("bulk: every selected product is added, then removed from the wishlist; cou
   assert.ok(page.pageBody.find(".kw-empty"), "the empty state is shown");
   assert.match(drawerText(drawer), /Snowboard/);
   assert.match(drawerText(drawer), /Shirt/, "the final drawer holds the whole bulk add");
+  assert.equal(drawer.node.has("is-empty"), false, "and the drawer is not left flagged as empty");
   assert.deepEqual(page.log.toasts, ["Added to cart"]);
 });
 
