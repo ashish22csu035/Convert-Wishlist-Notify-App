@@ -430,7 +430,11 @@ dbTest("migration: additive and nullable; existing shops, settings, ids and cons
     assert.deepEqual(late[1], { wishlist: true, notifyMe: true, appearance: { version: 1 } }, "a shop that had no settings row at all");
     assert.deepEqual(late[2], DEFAULT_APPEARANCE);
 
-    const saved = runApp(url, `const m = await import("./app/models/settings.server.js"); const r = await m.saveAppearance("old-a.myshopify.com", { general: { iconType: "star" } }); console.log(JSON.stringify([r.ok, await m.getStorefrontFeatures("old-a.myshopify.com")])); ${END}`);
+    // Writing goes through the CURRENT app code, whose Prisma model also holds the columns of every later migration (an upsert returns the
+    // whole row), so the rehearsal database is brought to the current schema first. The assertions above were made at this migration's own
+    // schema; the one below only proves that saving leaves the rest of the migrated row alone.
+    for (const dir of migrationDirs().filter((later) => later > last)) await applyMigration(scratch, dir);
+    const saved = runApp(url,`const m = await import("./app/models/settings.server.js"); const r = await m.saveAppearance("old-a.myshopify.com", { general: { iconType: "star" } }); console.log(JSON.stringify([r.ok, await m.getStorefrontFeatures("old-a.myshopify.com")])); ${END}`);
     assert.deepEqual(saved, [true, { wishlist: false, notifyMe: true, appearance: { version: 1, general: { iconType: "star" } } }]);
     const row = toPlain(await scratch.$queryRawUnsafe("SELECT wishlistEnabled, notifyMeEnabled, senderName, activityRetentionDays FROM ShopSettings WHERE shopId = ?", shopId));
     assert.deepEqual(row, [{ wishlistEnabled: 0, notifyMeEnabled: 1, senderName: "Hat Shop", activityRetentionDays: 90 }], "saving the appearance on the migrated row left the rest alone");

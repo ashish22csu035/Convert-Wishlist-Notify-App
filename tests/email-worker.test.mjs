@@ -239,6 +239,38 @@ test("a successful send: one email with the right content, the job SENT, the sub
   assert.equal(transport.calls.length, 1);
 });
 
+test("a send records the plan its quota was reserved under, with sentAt, and a later plan change never re-attributes it", async () => {
+  const basic = await makeShop("plan-basic");
+  const paid = await makeShop("plan-paid");
+  const now = Date.now();
+  await prisma.shopSubscription.create({ data: { shopId: paid.id, plan: "ENTERPRISE", status: "ACTIVE", verificationSource: "app_pricing", verifiedAt: new Date(now - 60000), currentPeriodStart: new Date(now - 86400000), currentPeriodEnd: new Date(now + 20 * 86400000) } });
+  const a = await makeJob(basic);
+  const b = await makeJob(paid);
+  const transport = fakeTransport();
+  assert.equal((await claimAndRun(basic, ctxWith(transport))).result, "SENT");
+  assert.equal((await claimAndRun(paid, ctxWith(transport))).result, "SENT");
+  const rowA = await jobRow(a.job.id);
+  const rowB = await jobRow(b.job.id);
+  assert.deepEqual([rowA.status, rowA.planAtSend, rowA.sentAt instanceof Date, rowA.reservedAt instanceof Date], ["SENT", "BASIC", true, true], "no subscription row: the effective plan was Basic");
+  assert.deepEqual([rowB.status, rowB.planAtSend], ["SENT", "ENTERPRISE"]);
+  await prisma.shopSubscription.update({ where: { shopId: paid.id }, data: { status: "CANCELLED" } });
+  assert.equal((await jobRow(b.job.id)).planAtSend, "ENTERPRISE", "the plan in force when it was sent, not the shop's current plan");
+});
+
+test("a plan change between the quota reservation and the SMTP submission does not re-attribute the email", async () => {
+  const shop = await makeShop("plan-between");
+  const now = Date.now();
+  await prisma.shopSubscription.create({ data: { shopId: shop.id, plan: "ADVANCE", status: "ACTIVE", verificationSource: "app_pricing", verifiedAt: new Date(now - 60000), currentPeriodStart: new Date(now - 86400000), currentPeriodEnd: new Date(now + 20 * 86400000) } });
+  const { job } = await makeJob(shop);
+  const claimed = await m.claimNext({ shopIds: [shop.id] });
+  assert.deepEqual([claimed.id, claimed.planAtSend], [job.id, "ADVANCE"], "reserved under the verified Advance plan");
+  await prisma.shopSubscription.update({ where: { shopId: shop.id }, data: { status: "CANCELLED" } }); // downgraded after the claim, before the send
+  const transport = fakeTransport();
+  assert.equal(await m.processJob(claimed, ctxWith(transport)), "SENT");
+  const row = await jobRow(job.id);
+  assert.deepEqual([row.status, row.planAtSend, row.reservedAt instanceof Date, row.sentAt instanceof Date], ["SENT", "ADVANCE", true, true], "attributed to the plan it was reserved under, not the plan at the moment of sending");
+});
+
 test("a second queued job for an already-notified subscription is skipped, so one customer gets one email", async () => {
   const shop = await makeShop("twojobs");
   const first = await makeJob(shop, { cycle: 1, availabilityCycle: 2 });
@@ -328,13 +360,15 @@ test("if the send succeeded but recording it fails, the job is never resent: it 
   const shop = await makeShop("unrecorded");
   const { job, sub } = await makeJob(shop);
   const transport = fakeTransport();
+  const claimed = await m.claimNext({ shopIds: [shop.id] }); // the claim is itself a transaction: take it before the fake failure
+  assert.ok(claimed, "a job was claimed");
   const original = appPrisma.$transaction;
   appPrisma.$transaction = async () => {
     throw new Error("database went away");
   };
   let result;
   try {
-    result = (await claimAndRun(shop, ctxWith(transport))).result;
+    result = await m.processJob(claimed, ctxWith(transport));
   } finally {
     appPrisma.$transaction = original;
   }

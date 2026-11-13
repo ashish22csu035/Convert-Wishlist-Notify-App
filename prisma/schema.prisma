@@ -112,6 +112,9 @@ model Shop {
   orders         ShopifyOrder[]
   webhookEvents  WebhookEvent[]
   analyticsDaily AnalyticsDaily[]
+
+  subscription       ShopSubscription?
+  planRecommendation PlanRecommendation?
 }
 
 model ShopSettings {
@@ -309,6 +312,12 @@ model EmailDelivery {
   outboundMessageId String?        @unique
   linkTokenHash     String?        @unique @db.Char(64)
   errorCode         String?        @db.VarChar(64)
+  // Quota accounting (app/models/email-quota.server.js). planAtSend is the plan the email was RESERVED under when a worker
+  // claimed it, and is written again in the same update that makes the row SENT; it is never inferred later from the shop's
+  // current plan. NULL = an email recorded before this existed ("legacy": counted against Basic, never against a paid plan).
+  // reservedAt is when the claim reserved the quota; it dates a SENDING / UNKNOWN row (which has no sentAt) into a billing period.
+  planAtSend        PlanTier?
+  reservedAt        DateTime?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
@@ -317,6 +326,7 @@ model EmailDelivery {
   @@unique([subscriptionId, restockCycle])
   @@index([status, nextAttemptAt])
   @@index([shopId, createdAt])
+  @@index([shopId, status, planAtSend])
 }
 
 // Dedupe and audit log for incoming webhooks. No payload is stored.
@@ -410,6 +420,95 @@ model OrderAttribution {
   @@unique([orderId, shopId, feature, matchedProductGid], map: "OrderAttribution_order_shop_feature_product_key")
   @@index([shopId, feature, attributedAt])
   @@index([touchEventId])
+}
+
+// ---------------------------------------------------------------------------
+// Billing foundation (app/models/plans.server.js, entitlements.server.js, plan-recommendation.server.js).
+// Nothing here talks to Shopify: these rows only RECORD what a verification found. No Shopify subscription id,
+// billing period or paid status is ever filled in unless a verification returned it.
+// ---------------------------------------------------------------------------
+
+enum PlanTier {
+  BASIC
+  ADVANCE
+  ENTERPRISE
+}
+
+enum BillingStatus {
+  ACTIVE
+  PENDING
+  CANCELLED
+  FROZEN
+  EXPIRED
+}
+
+enum RecommendationStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  NEEDS_ACCESS
+}
+
+// The shop's selected plan, one row per shop. A free BASIC row needs no Shopify subscription. ADVANCE / ENTERPRISE only
+// grant their entitlements while the row is ACTIVE, was verified recently (verifiedAt, verificationSource) and has
+// billing-period boundaries: see resolveEntitlements. The restock-email quota of a paid plan resets on
+// currentPeriodStart / currentPeriodEnd, exactly as Shopify reported them, never on a calendar month.
+model ShopSubscription {
+  id                         String        @id @default(uuid()) @db.Char(36)
+  shopId                     String        @unique @db.Char(36)
+  plan                       PlanTier      @default(BASIC)
+  status                     BillingStatus @default(ACTIVE)
+  // Shopify's own identifiers, only when a verification returned them.
+  shopifySubscriptionGid     String?
+  planHandle                 String?       @db.VarChar(100)
+  // How the row was verified (for example the billing mechanism's name). NULL = never verified.
+  verificationSource         String?       @db.VarChar(32)
+  verifiedAt                 DateTime?
+  currentPeriodStart         DateTime?
+  currentPeriodEnd           DateTime?
+  // Verification retries after a failed or unavailable check; the plan is NOT changed by a failure.
+  nextVerificationAt         DateTime?
+  verificationFailures       Int           @default(0)
+  lastVerificationError      String?       @db.VarChar(64)
+  // Claim for the verification worker: a row is claimable when this is NULL or in the past, so a worker that died leaves a
+  // lease that simply expires. The worker that claimed it writes its result only while this still holds ITS value.
+  verificationLeaseExpiresAt DateTime?
+  // From the last successful Shopify App Pricing verification, for the merchant's Plan and usage page. NULL = not known (never a guess):
+  //   trialEndsAt        the end of a running trial (Shopify reports no billing cycle until it is over)
+  //   cancelAtPeriodEnd  true when the subscription will be cancelled when the current billing cycle ends
+  trialEndsAt                DateTime?
+  cancelAtPeriodEnd          Boolean?
+  createdAt                  DateTime      @default(now())
+  updatedAt                  DateTime      @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextVerificationAt])
+}
+
+// The one-time "sessions in the previous 30 days" lookup and the advisory plan it suggests, one row per shop.
+// sessions30d is NULL until a lookup really returned a count: a failed, denied or empty answer is never stored as 0.
+// recommendedPlan is advice only and says nothing about what the merchant subscribes to.
+model PlanRecommendation {
+  id              String               @id @default(uuid()) @db.Char(36)
+  shopId          String               @unique @db.Char(36)
+  status          RecommendationStatus @default(PENDING)
+  attempts        Int                  @default(0)
+  nextAttemptAt   DateTime?
+  leaseExpiresAt  DateTime?
+  errorCode       String?              @db.VarChar(64)
+  sessions30d     Int?
+  periodStart     DateTime?
+  periodEnd       DateTime?
+  fetchedAt       DateTime?
+  recommendedPlan PlanTier?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
 }
 
 // The old numeric id of every row whose primary key became a UUID v4, kept so a row can still be traced to

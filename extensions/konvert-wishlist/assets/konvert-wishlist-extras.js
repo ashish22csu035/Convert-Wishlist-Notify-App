@@ -152,6 +152,15 @@
   }
   kw.request = request;
 
+  // The toast for a failed add. wishlist_full: THIS customer reached their own limit (they can remove an item). shop_wishlist_limit_reached
+  // (HTTP 409): the store's plan allows no more items for anyone, which the customer cannot fix, so the text must not tell them to remove one.
+  function addFailureText(error) {
+    var code = error && error.message;
+    if (code === 'wishlist_full') return config.text.full;
+    if (code === 'shop_wishlist_limit_reached') return config.text.storeFull || config.text.error;
+    return config.text.error;
+  }
+
   function warn(what, error) {
     if (window.console) console.warn('[konvert-wishlist] ' + what, error && error.message, error && error.status, (error && error.requestId) || '');
   }
@@ -312,7 +321,7 @@
       .catch(function (error) {
         warn('toggle failed', error);
         var auth = error.status === 401;
-        showToast(auth ? config.text.loginPrompt : error.message === 'wishlist_full' ? config.text.full : config.text.error, auth);
+        showToast(auth ? config.text.loginPrompt : addFailureText(error), auth);
       })
       .then(function () {
         kw.setBusy(button, false);
@@ -1891,8 +1900,7 @@
       })
       .catch(function (error) {
         if (error && error.status === 401) kw.showToast(config.text.loginPrompt, true);
-        else if (error && error.message === 'wishlist_full') kw.showToast(config.text.full, false);
-        else kw.showToast(config.text.error, false);
+        else kw.showToast(addFailureText(error), false);
       })
       .then(function () {
         buttons.forEach(function (button) {

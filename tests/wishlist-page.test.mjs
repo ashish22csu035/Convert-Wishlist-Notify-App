@@ -452,8 +452,8 @@ test("Add to cart uses the localized cart URL, confirms the cart, and only then 
   assert.equal(JSON.stringify(page.log.cart), JSON.stringify([{ items: [{ id: 11, quantity: 3 }] }]));
   assert.deepEqual(
     page.log.calls,
-    ["POST /fr/cart/add.js", "GET /fr/cart.js", "WISHLIST remove 1"],
-    "add, confirm from the cart, and only then remove from the wishlist"
+    ["POST /fr/cart/add.js", "GET /fr/cart.js", "WISHLIST cart_add 1", "WISHLIST remove 1"],
+    "add, confirm from the cart, record the cart activity, and only then remove from the wishlist"
   );
   assert.equal(page.rows().length, 1, "row disappears after the removal succeeded");
   assert.equal(text(page.rows()[0], ".kw-row__title"), "Gift Card");

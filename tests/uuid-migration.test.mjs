@@ -90,7 +90,9 @@ test("rehearsal: the earlier migrations build the legacy (INT id) schema and leg
   const dirs = migrationDirs();
   const uuidMigration = dirs.find((d) => d.endsWith("_uuid_primary_keys"));
   assert.ok(uuidMigration, "the migration exists");
-  for (const dir of dirs.filter((d) => d !== uuidMigration)) await run(scratch, `prisma/migrations/${dir}/migration.sql`);
+  // The LEGACY schema is what existed BEFORE the UUID migration. Migrations written after it assume UUID keys (for example foreign keys to
+  // CHAR(36) ids), so applying them to integer ids is impossible by design and is not part of this rehearsal.
+  for (const dir of dirs.filter((d) => d < uuidMigration)) await run(scratch, `prisma/migrations/${dir}/migration.sql`);
   assert.match((await q("SELECT COLUMN_TYPE t FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Shop' AND COLUMN_NAME = 'id'"))[0].t, /^int/, "legacy ids are integers");
 
   const x = (sql) => scratch.$executeRawUnsafe(sql);
@@ -276,7 +278,12 @@ test("the real database was migrated: every migrated id is a UUID, the mapping e
     const bad = await admin.$queryRawUnsafe(`SELECT COUNT(*) n FROM \`${t}\` WHERE id NOT REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'`);
     assert.equal(Number(bad[0].n), 0, `${t}: no id that is not a UUID v4`);
   }
-  assert.ok(Number((await admin.$queryRawUnsafe("SELECT COUNT(*) n FROM IdMapping"))[0].n) >= 1, "the old-to-new id mapping is kept");
+  // The mapping is the record of legacy ids, so it can only be non-empty on a database that HELD legacy rows when the migration ran. A database
+  // built from scratch (a fresh install, a test database) has none: the table must exist, and must be non-empty only when rows older than the
+  // migration exist.
+  const mapped = Number((await admin.$queryRawUnsafe("SELECT COUNT(*) n FROM IdMapping"))[0].n);
+  const older = Number((await admin.$queryRawUnsafe("SELECT COUNT(*) n FROM Shop WHERE installedAt < ?", applied[0].finished_at))[0].n);
+  if (older > 0) assert.ok(mapped >= 1, "the old-to-new id mapping is kept");
   const orphans = await admin.$queryRawUnsafe("SELECT (SELECT COUNT(*) FROM ActivityEvent e LEFT JOIN BrowsingSession b ON b.id = e.browsingSessionId WHERE e.browsingSessionId IS NOT NULL AND b.id IS NULL) + (SELECT COUNT(*) FROM EmailDelivery d LEFT JOIN NotifySubscription n ON n.id = d.subscriptionId WHERE n.id IS NULL) + (SELECT COUNT(*) FROM OrderAttribution t WHERE t.touchEventId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ActivityEvent e WHERE e.id = t.touchEventId)) n");
   assert.equal(Number(orphans[0].n), 0, "no foreign key points nowhere");
 });

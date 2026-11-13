@@ -7,3 +7,5 @@ export const getAttribution = loadMerchantContext;
 export const hasOrderScope = loadMerchantContext;
 export const describeItem = (_catalog, row) => ({ title: row.productGid ? "Blue Hat" : null, variantTitle: null, found: true, price: 12, imageUrl: null });
 export const fetchCatalog = loadMerchantContext;
+export const getOnboarding = loadMerchantContext;
+export const saveOnboardingIntent = loadMerchantContext;

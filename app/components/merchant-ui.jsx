@@ -81,7 +81,7 @@ export function DateRange({ period }) {
   // A select only reports a CHANGE. Once a custom range is applied the select would already be on "Custom range", and
   // choosing it again would say nothing, so the calendar could never be reopened. The range on screen therefore has its
   // own option ("applied", labelled with the dates) and "Custom range" always stays a different choice from it.
-  const options = [...RANGE_OPTIONS, ...(custom ? [["applied", describePeriod(period).label]] : []), ["custom", "Custom range"]];
+  const options = [...RANGE_OPTIONS.filter(([days]) => !period.maxDays || days <= period.maxDays), ...(custom ? [["applied", describePeriod(period).label]] : []), ["custom", "Custom range"]];
   const selected = open ? "custom" : custom ? "applied" : period.days;
 
   return (

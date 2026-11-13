@@ -38,7 +38,9 @@ before(async () => {
       {
         name: "server-only-stubs",
         setup(b) {
-          b.onResolve({ filter: /^\.\.\/(utils\/merchant\.server|models\/reporting\.server|models\/catalog\.server)$/ }, () => ({ path: path.resolve("tests/helpers/empty-server-module.mjs") }));
+          b.onResolve({ filter: /^\.\.\/(utils\/merchant\.server|models\/reporting\.server|models\/catalog\.server|models\/settings\.server)$/ }, () => ({ path: path.resolve("tests/helpers/empty-server-module.mjs") }));
+          // Shopify authentication (the real app/shopify.server.js builds the Shopify app and a Prisma session store): the same stand-in the route tests use.
+          b.onResolve({ filter: /(^|\/)shopify\.server$/ }, () => ({ path: path.resolve("tests/helpers/admin-session-stub.mjs") }));
         },
       },
     ],
@@ -118,7 +120,7 @@ test("a type the page has never heard of still renders, with a generic line, ins
 
 test("empty Wishlist and Notify Me data: KPI cards render, with the empty states", async () => {
   const html = await render(data());
-  for (const label of ["Wishlist items", "Unique Wishlist users", "Wishlist sessions", "Active Notify Me subscriptions", "Restock emails sent", "Attributed revenue"]) assert.ok(html.includes(label), label);
+  for (const label of ["Wishlist items", "Unique Wishlist users", "Total sessions", "Active Notify Me subscriptions", "Restock emails sent", "Attributed revenue"]) assert.ok(html.includes(label), label);
   assert.match(html, /No activity yet/);
   assert.match(html, /No saved products/);
 });

@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import { numericId } from "../utils/shopify-ids.server";
 import { DEFAULT_DAYS, PAGE_SIZE, RANGE_DAYS } from "../utils/dashboard-constants";
-import { DAY_MS, parsePeriod, previousOf, resolvePeriod, startOfUtcDay } from "../utils/period";
+import { DAY_MS, parsePeriod, previousOf, previousWithinHistory, resolvePeriod, startOfUtcDay } from "../utils/period";
 
 export { parsePeriod };
 
@@ -224,7 +224,7 @@ export async function getDashboard(shop, input = DEFAULT_DAYS, now = new Date())
   const period = resolvePeriod(input, now);
   const { since, until, days } = period;
   const { since: prevSince } = previousOf(period);
-  const comparable = shop.installedAt <= prevSince; // tracking covers the whole previous period
+  const comparable = shop.installedAt <= prevSince && previousWithinHistory(period, now); // tracking covers the whole previous period, and so does the plan's analytics history
   const prev = (fn) => (comparable ? fn() : Promise.resolve(null));
 
   const [window, previous, allTime, subscriptions, deliveries, wishlist, users, previousUsers, sessions, previousSessions, series, top, recent] =
@@ -303,7 +303,7 @@ export async function getAnalytics(shop, input = DEFAULT_DAYS, now = new Date())
   const period = resolvePeriod(input, now);
   const dashboard = await getDashboard(shop, period, now);
   const { since: prevSince } = previousOf(period);
-  const comparable = shop.installedAt <= prevSince; // tracking covers the whole previous period
+  const comparable = shop.installedAt <= prevSince && previousWithinHistory(period, now); // tracking covers the whole previous period, and so does the plan's analytics history
   const [customers, topProducts, sessionCounts] = await Promise.all([
     topCustomers(shop.id, period.since, period.until, 5),
     topSavedProducts(shop.id, 5),
@@ -336,7 +336,7 @@ export async function getAnalyticsOverview(shop, input = DEFAULT_DAYS, now = new
   const period = resolvePeriod(input, now);
   const { since, until, days } = period;
   const { since: prevSince } = previousOf(period);
-  const comparable = shop.installedAt <= prevSince; // tracking covers the whole previous period
+  const comparable = shop.installedAt <= prevSince && previousWithinHistory(period, now); // tracking covers the whole previous period, and so does the plan's analytics history
   const [current, prior, topProducts, customers, lastUpdated] = await Promise.all([
     summarizedActivity(shop, since, until, now),
     comparable ? summarizedActivity(shop, prevSince, since, now) : Promise.resolve(null),

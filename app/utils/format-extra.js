@@ -18,6 +18,7 @@ const DELIVERY_REASONS = {
   shop_unavailable: "Shopify could not be reached; will retry",
   shopify_throttled: "Shopify asked us to slow down; will retry",
   product_lookup_failed: "Product details could not be read; will retry",
+  quota_exhausted: "Waiting: the plan's restock-email allowance is used up",
 };
 
 export function deliveryReason(code) {

@@ -69,6 +69,15 @@ export function previousOf(period) {
   return { since: new Date(period.since.getTime() - length), until: period.since };
 }
 
+// Whether the period straight before this one lies inside the plan's analytics history (period.maxDays, set by limitPeriod). A comparison
+// would otherwise read back up to twice the permitted history. With no limit on the period everything is allowed, as before. The previous
+// period is offered only when ALL of it is permitted: a shorter, differently sized comparison would make the change figures misleading.
+export function previousWithinHistory(period, now = new Date()) {
+  if (!period.maxDays) return true;
+  const earliest = startOfUtcDay(now).getTime() - (period.maxDays - 1) * DAY_MS;
+  return previousOf(period).since.getTime() >= earliest;
+}
+
 const SHORT = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 const FULL = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 
@@ -86,5 +95,27 @@ export function describePeriod(period) {
 // The plain data a screen needs: no Dates, so it serialises the same on the server and in the browser.
 // `error` is set when a custom range in the URL was refused and the default preset is shown instead.
 export function periodView(period) {
-  return { kind: period.kind, days: period.days, from: period.from ?? null, to: period.to ?? null, error: period.error ?? null, requested: period.requested ?? null };
+  return { kind: period.kind, days: period.days, from: period.from ?? null, to: period.to ?? null, error: period.error ?? null, requested: period.requested ?? null, ...(period.maxDays ? { maxDays: period.maxDays, limited: period.limited === true } : {}) };
+}
+
+// Shortens a period to the plan's analytics history (`maxDays`, whole UTC days counted back from today), never refuses it. A period that
+// already fits is returned unchanged (apart from `maxDays`, which the screen uses to offer only the presets the plan allows).
+//   preset  the longest preset that fits (a plan between two presets gets the shorter one)
+//   custom  the start moves forward so at most maxDays days remain, ending on the same last day; an end that is itself older than the
+//           window is cut back with it (the whole range lies outside the plan's history, so the window's own newest days are shown)
+// `limited: true` says the requested period was shortened. A missing or invalid maxDays changes nothing.
+export function limitPeriod(period, maxDays, now = new Date()) {
+  if (!Number.isInteger(maxDays) || maxDays < 1) return period;
+  const earliest = new Date(startOfUtcDay(now).getTime() - (maxDays - 1) * DAY_MS);
+  if (period.kind === "preset") {
+    if (period.days <= maxDays) return { ...period, maxDays };
+    const fit = Math.max(0, ...RANGE_DAYS.filter((days) => days <= maxDays));
+    return { ...presetPeriod(fit || maxDays, now), maxDays, limited: true, ...(period.error ? { error: period.error, requested: period.requested } : {}) };
+  }
+  if (period.since >= earliest) return { ...period, maxDays };
+  const last = new Date(period.until.getTime() - DAY_MS);
+  const start = earliest;
+  const end = last < earliest ? new Date(startOfUtcDay(now).getTime()) : last;
+  const days = Math.round((end.getTime() - start.getTime()) / DAY_MS) + 1;
+  return { kind: "custom", days, since: start, until: new Date(end.getTime() + DAY_MS), from: isoDay(start), to: isoDay(end), maxDays, limited: true };
 }

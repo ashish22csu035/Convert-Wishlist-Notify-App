@@ -42,8 +42,10 @@ const { base, media } = split(css);
 const phone = media.find((m) => m.query === "(max-width: 560px)" && m.body.includes(".kv-chart-scroll"));
 
 test("every breakpoint is one the stylesheet already used: no competing system", () => {
-  const queries = [...new Set(media.map((m) => m.query))].sort();
+  const queries = [...new Set(media.map((m) => m.query))].filter((query) => query.startsWith("(max-width")).sort();
   assert.deepEqual(queries, ["(max-width: 359px)", "(max-width: 560px)", "(max-width: 700px)", "(max-width: 900px)"]);
+  // A user-preference query is not a width breakpoint: the only one allowed is reduced motion.
+  assert.deepEqual([...new Set(media.map((m) => m.query))].filter((query) => !query.startsWith("(max-width")), ["(prefers-reduced-motion: reduce)"]);
 });
 
 test("the phone rules live only inside the phone media query", () => {
@@ -85,7 +87,7 @@ test("KPI cards stay two to a row on a phone, switch cards take the row, and onl
 
 test("overflow is never hidden to cover a layout problem; the chart scrolls inside its own box", () => {
   assert.equal(/overflow-x:\s*hidden/.test(css), false);
-  assert.equal(/\boverflow:\s*hidden/.test(base.replace(/\.kv-product-title[^}]*\}/g, "").replace(/\.kv-thumb[^}]*\}/g, "").replace(/\.kv-sr[^}]*\}/g, "").replace(/\.kv-pv-(?:stage|device)[^}]*\}/g, "")), false, "no blanket overflow: hidden (only the thumbnail, the ellipsis title, the screen-reader text and the Wishlist Settings preview viewport clip; the preview's content scrolls inside its own frame)");
+  assert.equal(/\boverflow:\s*hidden/.test(base.replace(/\.kv-product-title[^}]*\}/g, "").replace(/\.kv-thumb[^}]*\}/g, "").replace(/\.kv-sr[^}]*\}/g, "").replace(/\.kv-pv-(?:stage|device)[^}]*\}/g, "").replace(/\.kv-(?:setup-bar|np-canvas|np-img)[^}]*\}/g, "")), false, "no blanket overflow: hidden (only the thumbnail, the ellipsis title, the screen-reader text, the Wishlist Settings preview viewport, the setup progress track and the Notify Me preview canvas and image crop clip; each clips content that is meant to be cut to its frame)");
   assert.match(phone.body, /\.kv-chart-scroll \{\s*overflow-x: auto;/);
   assert.match(phone.body, /\.kv-chart \{\s*min-width: 520px;/);
   assert.match(phone.body, /\.kv-chart text \{\s*font-size: 12px;/, "axis labels stay readable at the scaled size");

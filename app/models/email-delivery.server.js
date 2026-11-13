@@ -4,6 +4,7 @@ import { LookupError, fetchProductForEmail } from "./shopify-lookup.server";
 import { buildRestockEmail } from "./restock-email.server";
 import { hashToken, newToken, unsubscribeUrl } from "./unsubscribe.server";
 import { addressOf } from "./mail-config.server";
+import { QUOTA_BLOCKED, reserveForSend } from "./email-quota.server";
 
 // Sends the restock emails queued by processRestock (EmailDelivery rows). One row = one email for one
 // subscription in one restock cycle; UNIQUE(subscriptionId, restockCycle) makes a second row impossible.
@@ -30,39 +31,83 @@ export const backoffMs = (attempt) => Math.min(60 * 1000 * 4 ** Math.max(0, atte
 const scopeOf = (shopIds) => (shopIds ? { shopId: { in: shopIds } } : {});
 const codeOf = (error) => String(error?.code ?? error?.name ?? "error").slice(0, 64);
 
-// Atomically takes the next due PENDING job, or returns null. The conditional UPDATE is what makes it safe:
-// of several workers racing for one row, exactly one matches `status = PENDING` and gets count 1.
-export async function claimNext({ now = new Date(), leaseMs = DEFAULT_LEASE_MS, shopIds } = {}) {
-  const candidates = await prisma.emailDelivery.findMany({
-    where: { status: "PENDING", nextAttemptAt: { lte: now }, ...scopeOf(shopIds) },
-    orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }, { id: "asc" }], // ids are random UUIDs: createdAt keeps the queue fair
-    take: 10,
-    select: { id: true },
-  });
-  for (const { id } of candidates) {
-    const claimed = await prisma.emailDelivery.updateMany({
-      where: { id, status: "PENDING", nextAttemptAt: { lte: now } },
-      data: { status: "SENDING", attempts: { increment: 1 }, leaseExpiresAt: new Date(now.getTime() + leaseMs) },
+// Atomically takes the next due PENDING job, or returns null. Taking a job also RESERVES its restock-email quota (see
+// email-quota.server.js): the shop's quota is checked and the row claimed in one step under a per-shop lock, so of several workers racing
+// for one row, or for the last unit of one shop's quota, exactly one wins.
+//
+// A shop whose quota is used up gets ALL its due jobs parked in one step and is left out of the rest of this call, and a candidate that
+// could not be taken is never selected again by this call. So blocked work can neither fill the queue's front nor end the search early:
+// the call keeps looking, batch after batch, until it claims a job or nothing eligible is left. It is bounded (MAX_CLAIM_ROUNDS batches),
+// and each batch makes progress (a claim, a whole shop parked, or candidates set aside), so it cannot loop.
+//
+// Errors: a transient deadlock is retried inside reserveForSend. Any other failure for ONE candidate sets that candidate aside and the
+// search goes on; only when EVERY attempt failed and nothing else happened is the last error thrown, so a broken database stops the run
+// loudly instead of looking like an empty queue.
+const CLAIM_BATCH = 10;
+export const MAX_CLAIM_ROUNDS = 50;
+
+export async function claimNext({ now = new Date(), leaseMs = DEFAULT_LEASE_MS, shopIds, enforce, db = prisma } = {}) {
+  const blockedShops = [];
+  const setAside = [];
+  let failures = 0;
+  let lastError = null;
+  let progress = false;
+  for (let round = 0; round < MAX_CLAIM_ROUNDS; round += 1) {
+    const where = { status: "PENDING", nextAttemptAt: { lte: now }, ...(setAside.length ? { id: { notIn: setAside } } : {}) };
+    const shopFilter = { ...(shopIds ? { in: shopIds } : {}), ...(blockedShops.length ? { notIn: blockedShops } : {}) };
+    if (Object.keys(shopFilter).length) where.shopId = shopFilter;
+    const candidates = await db.emailDelivery.findMany({
+      where,
+      orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }, { id: "asc" }], // ids are random UUIDs: createdAt keeps the queue fair
+      take: CLAIM_BATCH,
+      select: { id: true, shopId: true },
     });
-    if (claimed.count === 1) return prisma.emailDelivery.findUnique({ where: { id } });
+    if (!candidates.length) break;
+    for (const { id, shopId } of candidates) {
+      if (blockedShops.includes(shopId)) continue;
+      let result;
+      try {
+        result = await reserveForSend(id, { now, leaseMs, db, ...(enforce === undefined ? {} : { enforce }) });
+      } catch (error) {
+        failures += 1;
+        lastError = error;
+        setAside.push(id);
+        console.error("[worker] a job could not be claimed", JSON.stringify({ kind: error?.constructor?.name ?? "Error", code: codeOf(error) }));
+        continue;
+      }
+      if (result?.job) return result.job;
+      if (result?.aborted) {
+        failures += 1;
+        lastError = Object.assign(new Error(result.aborted), { code: result.aborted });
+        setAside.push(id);
+        continue;
+      }
+      progress = true;
+      if (result?.blocked) blockedShops.push(shopId);
+      else setAside.push(id); // taken by another worker, or no longer due
+    }
   }
+  if (failures && !progress) throw lastError;
   return null;
 }
 
-// What a finished run leaves behind. Read-only: nothing is changed.
-//   scheduled  PENDING jobs whose next attempt is in the future (a retry after a transient error): a
-//              LATER worker run sends them once they are due
-//   unknown    jobs whose outcome is unknown: never resent automatically, a person must look at them
+// What a finished run leaves behind. Read-only: nothing is changed. The counts never overlap:
+//   quotaBlocked  PENDING jobs parked because the plan's restock-email quota is used up (with a retry date, or without one: Basic's
+//                 lifetime quota has none); they are waiting for quota, not for a timer
+//   scheduled     the other PENDING jobs whose next attempt is in the future (a retry after a transient error): a LATER worker run sends
+//                 them once they are due
+//   unknown       jobs whose outcome is unknown: never resent automatically, a person must look at them
 export async function queueSnapshot({ now = new Date(), shopIds } = {}) {
-  const [scheduled, unknown] = await Promise.all([
+  const [quotaBlocked, scheduled, unknown] = await Promise.all([
+    prisma.emailDelivery.count({ where: { status: "PENDING", errorCode: QUOTA_BLOCKED, ...scopeOf(shopIds) } }),
     prisma.emailDelivery.aggregate({
-      where: { status: "PENDING", nextAttemptAt: { gt: now }, ...scopeOf(shopIds) },
+      where: { status: "PENDING", nextAttemptAt: { gt: now }, OR: [{ errorCode: null }, { errorCode: { not: QUOTA_BLOCKED } }], ...scopeOf(shopIds) },
       _count: { _all: true },
       _min: { nextAttemptAt: true },
     }),
     prisma.emailDelivery.count({ where: { status: "UNKNOWN", ...scopeOf(shopIds) } }),
   ]);
-  return { scheduled: scheduled._count._all, nextAttemptAt: scheduled._min.nextAttemptAt, unknown };
+  return { scheduled: scheduled._count._all, nextAttemptAt: scheduled._min.nextAttemptAt, unknown, quotaBlocked };
 }
 
 // A SENDING row whose lease ran out belongs to a worker that died. If it had not reached the SMTP call
@@ -237,7 +282,9 @@ export async function processJob(job, ctx) {
     await prisma.$transaction(async (tx) => {
       await tx.emailDelivery.updateMany({
         where: { id: job.id, status: { in: ["SENDING", "UNKNOWN"] } },
-        data: { status: "SENT", sentAt: now(), leaseExpiresAt: null, errorCode: null },
+        // The plan the quota was reserved under when this job was claimed, written with sentAt in the same update. A row claimed
+        // before attribution existed has none: BASIC, the conservative reading, never a guess from the shop's current plan.
+        data: { status: "SENT", sentAt: now(), planAtSend: job.planAtSend ?? "BASIC", leaseExpiresAt: null, errorCode: null },
       });
       await tx.notifySubscription.updateMany({ where: { id: subscription.id, status: "ACTIVE" }, data: { status: "FULFILLED" } });
       await tx.activityEvent.create({

@@ -37,6 +37,7 @@ export default function App() {
         <s-link href="/app/notify-me">Notify Me</s-link>
         <s-link href="/app/customers">Engaged customers</s-link>
         <s-link href="/app/analytics">Analytics</s-link>
+        <s-link href="/app/plan">Pricing</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>
       {loading ? (

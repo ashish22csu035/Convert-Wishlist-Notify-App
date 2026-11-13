@@ -6,6 +6,7 @@
     "login_link": "Log in",
     "close": "Close",
     "full": "Your wishlist is full. Remove an item to add another.",
+    "store_full": "Sorry, this store's wishlist is full right now, so this item could not be saved. Please try again later.",
     "error": "Something went wrong. Please try again.",
     "header_label": "My Wishlist",
     "empty": "Your wishlist is empty.",

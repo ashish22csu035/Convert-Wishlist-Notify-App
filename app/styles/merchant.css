@@ -1307,3 +1307,87 @@ button.kv-tab {
 .kv-np-email { max-width: 100%; margin: 0 auto; }
 .kv-np-email--mobile { max-width: 390px; }
 .kv-np-email--mobile .kv-email-frame { height: 520px; }
+
+/* ---------- Pricing page: the recommendation and the plan cards (tokens only; the columns wrap by themselves, no breakpoint needed) ---------- */
+.kv-reco {
+  border-color: var(--kv-primary);
+}
+.kv-reco-lead {
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 550;
+}
+.kv-reco-figure {
+  margin: 0 0 8px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 650;
+}
+.kv-reco-match {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 550;
+}
+.kv-reco-fine {
+  margin: 0;
+  font-size: 12px;
+  color: var(--kv-subdued);
+}
+.kv-plans {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  align-items: stretch;
+}
+.kv-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+.kv-plan.current {
+  border-color: var(--kv-primary);
+  box-shadow: inset 0 0 0 1px var(--kv-primary);
+}
+.kv-plan.recommended {
+  background: var(--kv-hover);
+}
+.kv-plan-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kv-plan-top h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 650;
+}
+.kv-plan-badges {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.kv-plan-price {
+  font-size: 22px;
+  line-height: 30px;
+  font-weight: 650;
+}
+.kv-plan-price.muted {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--kv-subdued);
+}
+.kv-plan-features {
+  flex: 1;
+  margin: 0;
+  padding: 0 0 0 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 20px;
+}

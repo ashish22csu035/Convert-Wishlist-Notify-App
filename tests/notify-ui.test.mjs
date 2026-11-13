@@ -95,7 +95,7 @@ async function mount({
     addEventListener: (type, fn) => (listeners[`window:${type}`] ||= []).push(fn),
   };
   const document = {
-    readyState: "complete", documentElement: { lang: "en", classList: { add: (name) => rootClasses.add(name) } }, body, head,
+    readyState: "complete", documentElement: { lang: "en", classList: { add: (name) => rootClasses.add(name) }, style: { setProperty() {}, removeProperty() {} }, setAttribute() {}, removeAttribute() {} }, body, head,
     createElement: (tag) => {
       const node = new Dom(tag);
       if (tag === "script") Object.defineProperty(node, "src", { set(v) { node._src = v; }, get: () => node._src });

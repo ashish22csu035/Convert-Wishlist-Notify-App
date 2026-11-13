@@ -18,6 +18,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { JSDOM } from "jsdom";
+import { installSaveBar } from "./helpers/save-bar.mjs";
 import { DEFAULT_APPEARANCE, resolveAppearance, validateAppearance } from "../app/utils/wishlist-appearance-shared.js";
 
 const require = createRequire(import.meta.url);
@@ -39,6 +40,7 @@ const h = (...args) => React.createElement(...args);
 
 before(async () => {
   dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: "http://localhost/app/wishlist-settings?embedded=1&host=abc&shop=demo-store.myshopify.com" });
+  installSaveBar(dom.window); // the Settings screens drive App Bridge's <ui-save-bar>; this is its stand-in
   for (const name of ["window", "document", "HTMLElement", "Node", "Event", "MouseEvent", "KeyboardEvent"]) {
     Object.defineProperty(globalThis, name, { value: name === "window" ? dom.window : dom.window[name], configurable: true, writable: true });
   }
@@ -418,7 +420,7 @@ test("opening or refreshing the URL directly works, for a shop with no saved app
   const initialIcon = container.querySelector('s-select[label="Icon"]').getAttribute("value");
   assert.equal(initialIcon, DEFAULT_APPEARANCE.general.iconType, "defaults");
   assert.equal(container.querySelector("[role=tab][aria-selected=true]").textContent, "General");
-  assert.equal(container.querySelectorAll("s-button").length >= 3, true);
+  assert.ok(byText("s-button", "Back to Settings") && byText("s-button", "Reset to defaults"), "the screen's own buttons; Save and Discard live in App Bridge's native save bar (tests/helpers/save-bar.mjs)");
   assert.deepEqual(validateAppearance(resolveAppearance(null)).errors, {}, "the starting state is valid, so Save is not blocked");
   await unmount();
 

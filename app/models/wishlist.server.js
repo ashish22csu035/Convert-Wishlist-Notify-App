@@ -2,10 +2,16 @@ import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import { findOrCreateBrowsingSession } from "./browsing-session.server";
 import { numericId } from "../utils/shopify-ids.server";
+import { billingEnforced } from "./plans.server";
+import { getEntitlements, wishlistCapacity } from "./entitlements.server";
+import { ensureShopSubscription, lockShopLimits } from "./shop-lock.server";
+import { isTransientDbError, retryDelayMs } from "./db-retry.server";
 
 // A browsing session lasts exactly 30 minutes from its start. Activity never
 // extends it (the database also enforces expiresAt = startedAt + 30 minutes).
-export const MAX_WISHLIST_ITEMS = 200;
+export const MAX_WISHLIST_ITEMS = 200; // per CUSTOMER; the plan's store-wide cap is separate (plans.server.js)
+// Stable error code for "this shop's plan allows no more wishlist items" (HTTP 409), distinct from the per-customer "wishlist_full".
+export const SHOP_WISHLIST_LIMIT = "shop_wishlist_limit_reached";
 
 // Shop.currencyCode is required by the schema but is not known on the
 // storefront path. "XXX" is the ISO 4217 code for "no currency"; the install
@@ -71,9 +77,12 @@ export async function mutate(identity, feature, work) {
         return work(tx, context);
       }, TX_OPTIONS);
     } catch (error) {
-      // P2002: lost a unique-key race on first insert. P2034: deadlock/conflict.
-      const retryable = error?.code === "P2002" || error?.code === "P2034";
-      if (!retryable || attempt >= 2) throw error;
+      // P2002: lost a unique-key race on first insert. Deadlocks and lock-wait timeouts (P2034, or P2010 from a raw query carrying
+      // MySQL's 1213 / 1205) are transient: the whole transaction is rerun from the start, at most twice more, after a short jittered
+      // pause. Anything else, and a failure that keeps coming back, is thrown.
+      const transient = isTransientDbError(error);
+      if ((error?.code !== "P2002" && !transient) || attempt >= 2) throw error;
+      if (transient) await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
     }
   }
 }
@@ -113,7 +122,12 @@ export async function listWishlist({ shopDomain, customerGid }) {
 // UNIQUE(actorId, variantGid), and this code checks first so a repeat is a quiet no-op
 // (no duplicate row and no second "added" event). Findings use findFirst on purpose, so
 // they do not depend on the generated compound-unique key.
-export function addToWishlist(identity, { productGid, variantGid, title, handle }) {
+export async function addToWishlist(identity, { productGid, variantGid, title, handle }) {
+  if (billingEnforced()) {
+    // The limits lock row must exist before the transaction takes it (see shop-lock.server.js).
+    const shop = await prisma.shop.upsert({ where: { domain: identity.shopDomain }, create: { domain: identity.shopDomain, currencyCode: UNKNOWN_CURRENCY }, update: {} });
+    await ensureShopSubscription(shop.id);
+  }
   return mutate(identity, "WISHLIST", async (tx, context) => {
     const { shop, actor } = context;
     if (!variantGid) throw new WishlistError("variant_required", 400);
@@ -126,6 +140,18 @@ export function addToWishlist(identity, { productGid, variantGid, title, handle 
 
     const count = await tx.wishlistItem.count({ where: { actorId: actor.id } });
     if (count >= MAX_WISHLIST_ITEMS) throw new WishlistError("wishlist_full", 409);
+
+    // The shop-wide cap, across every customer of this shop. The shop's limits lock is taken BEFORE counting, so simultaneous additions
+    // from different customers run one after the other and each counts what the previous one committed (this transaction is READ
+    // COMMITTED). The insert below is in the same transaction, so a refused or failed addition leaves nothing behind. Reads and removals
+    // are never checked, and nothing is deleted when a shop is already over its limit: only NEW additions are refused.
+    if (billingEnforced()) {
+      await lockShopLimits(tx, shop.id);
+      const entitlements = await getEntitlements(shop.id, { db: tx });
+      if (entitlements.lookupFailed) throw new WishlistError("billing_unavailable", 503); // a failed read is not a Basic shop: add nothing
+      const capacity = await wishlistCapacity(shop.id, entitlements, { db: tx });
+      if (!capacity.canAdd) throw new WishlistError(SHOP_WISHLIST_LIMIT, 409);
+    }
 
     await tx.wishlistItem.create({
       data: {

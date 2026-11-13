@@ -39,6 +39,12 @@ test("the root route sends anything Shopify opened (sidebar name, refresh, insta
   assert.equal(isAppEntryRequest(params("")), false, "bare URL keeps the login form");
   assert.equal(isAppEntryRequest(params("utm_source=x")), false);
   const route = fs.readFileSync("app/routes/_index/route.jsx", "utf8");
-  assert.match(route, /redirect\(`\/app\?\$\{url\.searchParams\.toString\(\)\}`\)/, "query is carried unchanged, nothing hardcoded");
+  // The route uses the redirect helper of authenticate.admin, which copies the request's query (embedded, host, shop, id_token...) onto a
+  // same-origin redirect itself, so the route hardcodes nothing and builds no query. The library behaviour is checked on the installed version.
+  assert.match(route, /const \{ redirect \} = await authenticate\.admin\(request\)/);
+  assert.match(route, /return redirect\("\/app"\)/);
+  assert.equal(/embedded=|host=|shop=|searchParams/.test(route), false, "nothing hardcoded");
+  const helper = fs.readFileSync("node_modules/@shopify/shopify-app-react-router/dist/esm/server/authenticate/admin/helpers/redirect.mjs", "utf8");
+  assert.match(helper, /searchParams\.forEach\(\(value, key\) => \{\s*if \(!parsedUrl\.searchParams\.has\(key\)\)/, "the installed library carries the query to same-origin redirects: re-check the route if this fails after an upgrade");
   assert.equal(fs.existsSync("app/routes/app._index.jsx"), true, "the one Dashboard route is reused");
 });

@@ -6,9 +6,11 @@ import { getAnalyticsOverview } from "./reporting.server";
 // catalog and the funnels stay outside it. The overview holds only numbers, strings, booleans and nulls, so it survives
 // JSON unchanged.
 //
-// Key:  <prefix>:analytics:v1:<shopId>:<version>:<period since>:<period until | open>
+// Key:  <prefix>:analytics:v1:<shopId>:<version>:<period since>:<period until | open>[:h<days>]
 //   - shopId is the shop the authenticated session resolved to on the server, never a request parameter.
 //   - the period's real boundaries are in the key (a "last 30 days" window moves at UTC midnight, so its key does too).
+//   - h<days> is added only when the plan limits the analytics history (the comparison period depends on it), so a plan change never serves a
+//     report computed under the other plan's limit.
 //   - <version> is the shop's counter <prefix>:analytics:ver:<shopId>. The analytics worker bumps it after it writes
 //     summaries, which makes every older key unreachable at once (no key scanning). They expire by TTL.
 // The version is read BEFORE the report is calculated and the result is stored under that version. A request that began
@@ -19,7 +21,7 @@ export const ANALYTICS_CACHE_TTL_SECONDS = 300;
 export const analyticsVersionKey = (shopId) => `${keyPrefix()}:analytics:ver:${shopId}`;
 
 export function analyticsCacheKey(shopId, version, period) {
-  return `${keyPrefix()}:analytics:v1:${shopId}:${version}:${period.since.toISOString()}:${period.until ? period.until.toISOString() : "open"}`;
+  return `${keyPrefix()}:analytics:v1:${shopId}:${version}:${period.since.toISOString()}:${period.until ? period.until.toISOString() : "open"}${period.maxDays ? `:h${period.maxDays}` : ""}`;
 }
 
 // Called by the analytics worker after it has written a shop's summaries. Never throws.

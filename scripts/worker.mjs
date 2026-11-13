@@ -20,6 +20,13 @@ if (!process.env.WORKER_SKIP_DOTENV) {
   }
 }
 
+// "full" (or unset) is the normal run. An unknown mode refuses to start rather than silently running the full worker.
+const mode = process.argv.includes("--recommendations") ? "recommendations" : (process.env.WORKER_MODE || "full").trim().toLowerCase();
+if (mode !== "full" && mode !== "recommendations") {
+  console.error("[worker] not started: WORKER_MODE must be \"full\" or \"recommendations\"");
+  process.exit(1);
+}
+
 const { ConfigError, readWorkerConfig } = await import("../app/models/mail-config.server.js");
 
 let config;
@@ -35,12 +42,43 @@ try {
 // The Shopify client reads these when it is first imported.
 process.env.SHOPIFY_APP_URL ||= config.baseUrl;
 
+// WORKER_MODE=recommendations (or --recommendations) is the scheduler's fast lane (app/worker/cron.js): ONLY the plan-recommendation step
+// (enqueue + lookups, with the same claims, leases, retries and time limits), then exit. No verification, no emails, no analytics summaries.
+// Anything else keeps the normal run below, which is unchanged.
+if (mode === "recommendations") {
+  const { runRecommendationJobs } = await import("../app/worker/billing-jobs.server.js");
+  const { getBillingServices } = await import("../app/models/billing-services.server.js");
+  const { default: prisma } = await import("../app/db.server.js");
+  let stopRequested = false;
+  const onStop = () => {
+    if (stopRequested) return;
+    stopRequested = true; // finish the lookup in progress, claim nothing new
+    setTimeout(() => process.exit(1), 45000).unref();
+  };
+  process.on("SIGINT", onStop);
+  process.on("SIGTERM", onStop);
+  let code = 0;
+  try {
+    // BILLING_MECHANISM is blanked so no subscription verifier is built (and none can run) in this mode.
+    const services = getBillingServices({ ...process.env, BILLING_MECHANISM: "" });
+    await runRecommendationJobs({ services, shouldStop: () => stopRequested });
+  } catch (error) {
+    console.error(`[worker] recommendation run failed: ${error?.code ?? error?.name ?? "error"}`);
+    code = 1;
+  } finally {
+    await prisma.$disconnect().catch(() => {});
+  }
+  process.exit(code);
+}
+
 const { createTransport } = await import("nodemailer");
 const { createWorker } = await import("../app/worker/worker.server.js");
 const { queueSnapshot } = await import("../app/models/email-delivery.server.js");
 const { getShopAdmin } = await import("../app/models/shopify-lookup.server.js");
 const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
 const { runAnalyticsDaily } = await import("../app/worker/analytics-daily.server.js");
+const { runBillingJobs } = await import("../app/worker/billing-jobs.server.js");
+const { getBillingServices } = await import("../app/models/billing-services.server.js");
 const { closeCache } = await import("../app/utils/cache.server.js");
 const { default: prisma } = await import("../app/db.server.js");
 
@@ -70,12 +108,22 @@ process.on("SIGTERM", () => onSignal("SIGTERM"));
 console.log("[worker] started (one-shot): sending queued emails that are due, then exiting");
 let exitCode = 0;
 try {
+  // Billing first (subscription verification, plan-recommendation lookups): entitlements are as fresh as possible before any email is
+  // claimed. It does nothing until a billing integration exists, and a failure here is logged but never stops the email run.
+  try {
+    await runBillingJobs({ services: getBillingServices(), shouldStop: () => signal !== null });
+  } catch (error) {
+    console.error(`[worker] billing steps failed: ${error?.code ?? error?.name ?? "error"}`);
+  }
   const { handled, outcomes } = await worker.drain();
   const detail = Object.entries(outcomes).map(([status, count]) => `${status}: ${count}`).join(", ");
   console.log(`[worker] ${signal ? "stopped early" : "queue drained"}: ${handled} job(s) handled${detail ? ` (${detail})` : ""}`);
   if (outcomes.CRASHED) exitCode = 1;
 
   const left = await queueSnapshot();
+  if (left.quotaBlocked) {
+    console.log(`[worker] ${left.quotaBlocked} job(s) are waiting because their plan's restock-email quota is used up (not retried on a timer; they continue after a verified renewal or upgrade).`);
+  }
   if (left.scheduled) {
     console.log(
       `[worker] ${left.scheduled} job(s) are scheduled for a retry (next due ${left.nextAttemptAt.toISOString()}). ` +

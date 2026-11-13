@@ -147,6 +147,8 @@ async function mount({
   storageBroken = false,
   extrasFails = false,
   addStatus = 200,
+  addError = "server_error",
+  storeFullText = "This store's wishlist is full right now.",
 } = {}) {
   const body = new Dom("body");
   const head = new Dom("head");
@@ -162,7 +164,7 @@ async function mount({
     collectionCards: false,
     text: {
       add: "Add to wishlist", saved: "Saved to wishlist", loginPrompt: "Log in to save items to your wishlist.",
-      loginLink: "Log in", close: "Close", full: "Wishlist full", error: "Something went wrong.",
+      loginLink: "Log in", close: "Close", full: "Wishlist full", ...(storeFullText === null ? {} : { storeFull: storeFullText }), error: "Something went wrong.",
       loginRedirect: "Please log in to save this to your wishlist.",
       loginStillRequired: "Please log in to finish saving this item to your wishlist.",
       savedAfterLogin: "Saved to your wishlist.",
@@ -279,7 +281,7 @@ async function mount({
         return { ok: true, status: 200, json: async () => ({ loggedIn, items: loggedIn ? backend.items : [], count: backend.items.length }) };
       }
       if (!loggedIn) return { ok: false, status: 401, json: async () => ({ error: "login_required" }) };
-      if (addStatus !== 200) return { ok: false, status: addStatus, json: async () => ({ error: "server_error" }) };
+      if (addStatus !== 200) return { ok: false, status: addStatus, json: async () => ({ error: addError }) };
       if (payload.op === "add") {
         const exists = backend.items.some((i) => i.productId === String(payload.productId));
         if (!exists) {
@@ -475,6 +477,56 @@ test("a failed save after login shows an error and is not retried on reload", as
 
   const reload = await mount({ loggedIn: true, browser });
   assert.equal(addRequests(reload).length, 0, "no automatic retry loop");
+});
+
+const said = (page) => page.toasts()[0]?.textContent.replace(/(?<=[.!?])[^.!?]*$/, "").trim(); // the toast's message without its close button (every message here ends in . ! or ?)
+
+// ---- plan limits: what a customer is told when an add is refused (409) ------------------
+// wishlist_full = THIS customer's own limit (they can remove an item); shop_wishlist_limit_reached = the store's plan allows no more items
+// for anyone, so the message must not tell the customer to remove something. Any other code stays the generic error.
+test("a refused add because the STORE's wishlist is full says so, in the after-login flow", async () => {
+  const browser = newBrowser();
+  await (await mount({ browser })).click();
+  const page = await mount({ loggedIn: true, browser, addStatus: 409, addError: "shop_wishlist_limit_reached" });
+  assert.equal(page.toasts().length, 1);
+  assert.equal(said(page), "This store's wishlist is full right now.");
+  assert.doesNotMatch(said(page), /Remove an item|Something went wrong/);
+  assert.equal(page.target.attrs["aria-pressed"], "false", "nothing is shown as saved");
+  assert.equal(page.target.attrs["aria-busy"], "false");
+});
+
+test("a refused add because the STORE's wishlist is full says so, on a normal click too", async () => {
+  const page = await mount({ loggedIn: true, addStatus: 409, addError: "shop_wishlist_limit_reached" });
+  await page.click();
+  assert.equal(said(page), "This store's wishlist is full right now.");
+  assert.equal(page.target.attrs["aria-pressed"], "false");
+  assert.equal(page.backend.items.length, 0);
+});
+
+test("the customer's own full wishlist keeps its own message, and an unknown refusal stays generic", async () => {
+  const own = await mount({ loggedIn: true, addStatus: 409, addError: "wishlist_full" });
+  await own.click();
+  assert.match(said(own), /^Wishlist full(?!.*store)/, "the customer's own limit keeps its own wording");
+  const other = await mount({ loggedIn: true, addStatus: 409, addError: "something_new" });
+  await other.click();
+  assert.equal(said(other), "Something went wrong.");
+  const unavailable = await mount({ loggedIn: true, addStatus: 503, addError: "billing_unavailable" });
+  await unavailable.click();
+  assert.equal(said(unavailable), "Something went wrong.", "a temporary billing lookup failure is a plain retry-later error");
+});
+
+test("a theme whose config has no storeFull text yet falls back to the generic error, never to an empty or undefined toast", async () => {
+  const page = await mount({ loggedIn: true, addStatus: 409, addError: "shop_wishlist_limit_reached", storeFullText: null });
+  await page.click();
+  assert.equal(said(page), "Something went wrong.");
+});
+
+test("the extension ships the store-full text: locale key, config entry and no reuse of the per-customer wording", () => {
+  const locale = JSON.parse(fs.readFileSync("extensions/konvert-wishlist/locales/en.default.json", "utf8"));
+  assert.match(locale.kw.store_full, /store/i);
+  assert.notEqual(locale.kw.store_full, locale.kw.full);
+  assert.doesNotMatch(locale.kw.store_full, /remove an item/i);
+  assert.match(fs.readFileSync("extensions/konvert-wishlist/snippets/kw-config.liquid", "utf8"), /"storeFull": {{ 'kw.store_full' | t | json }}/);
 });
 
 test("if the server says the visitor is not logged in, they are prompted again and nothing is shown as saved", async () => {
