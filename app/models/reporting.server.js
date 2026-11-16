@@ -199,6 +199,42 @@ async function dailySeries(shop, since, until, now) {
   return { days, values };
 }
 
+// Attributed revenue per UTC day for the Dashboard chart, split by feature: the SAME rows and rules as getAttribution (ACTIVE
+// attributions, the order's placedAt day, gross minus refunds, orders counted once however many lines are credited), so the
+// bars always add up to the revenue card. `days` are the chart's days. Mixed currencies are reported as unavailable (never added).
+export async function dailyRevenue(shopId, days) {
+  const empty = { days, wishlist: days.map(() => 0), notifyMe: days.map(() => 0), orders: days.map(() => 0), total: 0, ordersTotal: 0, currency: null, mixedCurrency: false };
+  if (!days.length) return empty;
+  const from = new Date(`${days[0]}T00:00:00Z`);
+  const to = new Date(new Date(`${days[days.length - 1]}T00:00:00Z`).getTime() + DAY_MS);
+  const rows = await prisma.orderAttribution.findMany({
+    where: { shopId, status: "ACTIVE", order: { placedAt: { gte: from, lt: to } } },
+    select: { orderId: true, feature: true, grossAmount: true, refundedAmount: true, currencyCode: true, order: { select: { placedAt: true } } },
+  });
+  const currencies = [...new Set(rows.map((row) => row.currencyCode))];
+  if (currencies.length > 1) return { ...empty, mixedCurrency: true };
+  const index = new Map(days.map((day, i) => [day, i]));
+  const seen = days.map(() => new Set());
+  const result = { ...empty, currency: currencies[0] ?? null };
+  const orderIds = new Set();
+  for (const row of rows) {
+    const i = index.get(dayKey(row.order.placedAt));
+    if (i === undefined) continue;
+    const net = Number(row.grossAmount.minus(row.refundedAmount));
+    (row.feature === "NOTIFY_ME" ? result.notifyMe : result.wishlist)[i] += net;
+    result.total += net;
+    seen[i].add(row.orderId);
+    orderIds.add(row.orderId);
+  }
+  result.orders = seen.map((set) => set.size);
+  result.ordersTotal = orderIds.size;
+  const cents = (value) => Math.round(value * 100) / 100;
+  result.wishlist = result.wishlist.map(cents);
+  result.notifyMe = result.notifyMe.map(cents);
+  result.total = cents(result.total);
+  return result;
+}
+
 async function topSavedProducts(shopId, take) {
   const rows = await prisma.wishlistItem.groupBy({
     by: ["productGid"],
@@ -261,6 +297,7 @@ export async function getDashboard(shop, input = DEFAULT_DAYS, now = new Date())
     deliveries,
     wishlist,
     series,
+    revenueSeries: await dailyRevenue(shop.id, series.days),
     topProducts: top,
     recent: recent.map(toEvent),
     unavailable: UNAVAILABLE,

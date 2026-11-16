@@ -327,6 +327,54 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   min-height: 160px;
 }
 
+/* ---------- Dashboard chart: stacked daily bars with a headline number ---------- */
+.kv-dchart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.kv-dchart-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--kv-subdued);
+}
+.kv-dchart-total {
+  margin-top: 2px;
+  font-size: 28px;
+  line-height: 34px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.kv-dchart-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--kv-subdued);
+}
+.kv-bars .kv-bars-band {
+  fill: var(--kv-hover);
+}
+.kv-bars .kv-bars-bar {
+  transition: opacity 0.12s ease;
+}
+.kv-bars .kv-bars-bar.dim {
+  opacity: 0.4;
+}
+.kv-bars .grid {
+  stroke-dasharray: 2 4;
+}
+.kv-bars .hit {
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kv-bars .kv-bars-bar {
+    transition: none;
+  }
+}
+
 /* ---------- Product cell ---------- */
 .kv-product {
   display: flex;

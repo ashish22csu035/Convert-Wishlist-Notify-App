@@ -26,6 +26,7 @@ const OUT_DIR = path.resolve("node_modules/.cache/kw-components-test");
 let UI;
 let Form;
 let Switch;
+let DChart;
 let Funnel;
 let React;
 let ReactRouter;
@@ -66,6 +67,7 @@ before(async () => {
   UI = await bundle("app/components/merchant-ui.jsx", "ui");
   Form = await bundle("app/components/settings-form.jsx", "form");
   Switch = await bundle("app/components/activity-switch.jsx", "switch");
+  DChart = await bundle("app/components/dashboard-chart.jsx", "dchart");
   Funnel = await bundle("app/components/product-funnel.jsx", "funnel");
   React = (await import("react")).default;
   ReactRouter = await import("react-router");
@@ -723,8 +725,8 @@ test("Notify Me page: Failed or unknown is no longer a KPI card; Notify Me-attri
 test("Dashboard: the KPI row, the revenue card without its long copy, and the activity switch", () => {
   const source = fs.readFileSync("app/routes/app._index.jsx", "utf8");
   assert.equal(source.includes("footnote="), false, "no long copy on the revenue card");
-  assert.match(source, /<ActivitySwitch series={d\.series} rangeLabel={words\.label} \/>/);
-  assert.equal(/ActivityChart/.test(source), false);
+  assert.match(source, /<DashboardChart[\s\S]*revenue={d\.revenueSeries}[\s\S]*rangeLabel={words\.label}[\s\S]*\/>/);
+  assert.equal(/ActivityChart|ActivitySwitch/.test(source), false, "the dashboard shows one revenue chart, not the two activity charts");
   for (const label of ["Unique Wishlist users", "Total sessions", "Active Notify Me subscriptions", "Restock emails sent", "Attributed revenue"]) assert.ok(source.includes(`label="${label}"`), label);
   assert.ok(source.includes('label="Wishlist items"'));
   assert.ok(source.includes("WISHLIST_ITEM_MODES"), "the Active/All-time selector is kept");
@@ -911,7 +913,7 @@ test("Dashboard: the old inline setup checklist stays gone (the new one is a sep
   const grid = source.indexOf("</Grid>");
   const split = source.indexOf("<Split>");
   const endSplit = source.indexOf("</Split>");
-  const activity = source.indexOf('<Card title="Activity"');
+  const activity = source.indexOf('<Card title="Performance"');
   const recent = source.indexOf('<Card title="Recent activity"');
   const products = source.indexOf('<Card title="Top wishlisted products"');
   assert.ok(grid < split && split < activity && activity < recent && recent < endSplit, "KPIs, then chart | Recent activity in one row");
@@ -920,7 +922,7 @@ test("Dashboard: the old inline setup checklist stays gone (the new one is a sep
   assert.equal((source.match(/title="Recent activity"/g) ?? []).length, 1, "Recent activity appears once");
   assert.match(source, /action={{ to: "\/app\/wishlist\?tab=activity", label: "View Wishlist log" }}/, "its navigation is kept");
   assert.match(source, /action={{ to: "\/app\/wishlist", label: "View all" }}/, "the products navigation is kept");
-  assert.match(source, /<ActivitySwitch series={d\.series} rangeLabel={words\.label} \/>/, "the chart and its selector are unchanged");
+  assert.match(source, /<DashboardChart[\s\S]*rangeLabel={words\.label}[\s\S]*\/>/, "the chart sits in the same card");
 });
 
 test("Dashboard layout CSS: the two-column row stretches to one height and stacks on a narrow screen", () => {
@@ -943,5 +945,64 @@ test("Dashboard Activity row: no summary cards over the chart, equal-height pane
   assert.equal(list.getAttribute("tabindex"), "0", "a scrolling region can be reached by keyboard");
   assert.equal(list.getAttribute("aria-label"), "Recent activity");
   assert.match(container.querySelector(".kv-feed-time").textContent, /Added to Wishlist · just now/);
+  await unmount();
+});
+
+// ---------- the Dashboard revenue chart ----------
+const DDAYS = ["2026-10-01", "2026-10-02", "2026-10-03"];
+const revenueOf = (over = {}) => ({ days: DDAYS, wishlist: [100, 0, 229], notifyMe: [0, 50, 129], orders: [1, 1, 2], total: 508, ordersTotal: 3, currency: "USD", mixedCurrency: false, ...over });
+const interestOf = (over = {}) => ({ days: DDAYS, wishlist: [3, 0, 2], notifyMe: [1, 1, 0], ...over });
+const dchart = (props = {}) => h(DChart.DashboardChart, { revenue: revenueOf(), interest: interestOf(), revenueAvailable: true, rangeLabel: "Last 30 days", ...props });
+const barsOf = () => [...container.querySelectorAll(".kv-bars-bar")].map((g) => g.querySelectorAll("path").length);
+
+test("dashboard chart: shows the revenue headline, one stacked bar per day and the same colours as the legend", async () => {
+  await mount(dchart());
+  assert.equal(container.querySelector("[data-testid=chart-total]").textContent, "$508.00");
+  assert.match(container.querySelector(".kv-dchart-sub").textContent, /^3 orders · Last 30 days$/);
+  assert.deepEqual(legend(), ["Wishlist", "Notify Me"]);
+  assert.deepEqual(barsOf(), [1, 1, 2], "a day with both features stacks two segments, a day with none draws nothing");
+  assert.match(container.querySelector("svg").getAttribute("aria-label"), /^Revenue from Wishlist and Notify Me, Last 30 days: \$508\.00 from 3 orders\./);
+  assert.deepEqual(switchButtons().map((b) => b.textContent), ["Revenue", "Interest"]);
+  assert.deepEqual(switchButtons().map((b) => b.getAttribute("aria-pressed")), ["true", "false"]);
+  await unmount();
+});
+
+test("dashboard chart: the tooltip shows that day's exact revenue per feature and its orders; the Interest view reads saves and sign-ups", async () => {
+  await mount(dchart());
+  await hoverDay("2026-10-03");
+  assert.equal(tooltip().querySelector(".kv-tooltip-date").textContent, "October 3, 2026");
+  assert.deepEqual(tooltipRows(), [["Wishlist", "$229.00"], ["Notify Me", "$129.00"], ["Orders", "2"]]);
+  await click(switchButtons()[1]);
+  assert.equal(container.querySelector("[data-testid=chart-total]").textContent, "7");
+  assert.match(container.querySelector(".kv-dchart-sub").textContent, /^5 Wishlist saves · 2 Notify Me sign-ups/);
+  assert.deepEqual(legend(), ["Wishlist saves", "Notify Me sign-ups"]);
+  await hoverDay("2026-10-01");
+  assert.deepEqual(tooltipRows(), [["Wishlist saves", "3"], ["Notify Me sign-ups", "1"]]);
+  await unmount();
+});
+
+test("dashboard chart: before the first order it opens on Interest; without order access or with mixed currencies it never offers revenue", async () => {
+  await mount(dchart({ revenue: revenueOf({ wishlist: [0, 0, 0], notifyMe: [0, 0, 0], orders: [0, 0, 0], total: 0, ordersTotal: 0 }) }));
+  assert.equal(container.querySelector(".kv-dchart-title").textContent, "Customer interest");
+  assert.deepEqual(switchButtons().map((b) => b.getAttribute("aria-pressed")), ["false", "true"]);
+  await unmount();
+  await mount(dchart({ revenueAvailable: false }));
+  assert.equal(switchButtons().length, 0, "no toggle when there is only one view");
+  assert.equal(container.querySelector(".kv-dchart-title").textContent, "Customer interest");
+  assert.equal(container.textContent.includes("$"), false, "no money is shown or invented");
+  await unmount();
+  await mount(dchart({ revenue: revenueOf({ mixedCurrency: true, total: 0 }) }));
+  assert.equal(switchButtons().length, 0);
+  assert.equal(container.textContent.includes("$"), false);
+  await unmount();
+});
+
+test("dashboard chart: the axis uses round steps that reach the tallest bar, and money is compact", async () => {
+  for (const [value, max] of [[0, 4], [3, 4], [458, 480], [1200, 1200], [2092, 2400], [9.5, 10]]) assert.equal(DChart.niceScale(value).max >= value, true, `${value}`);
+  assert.deepEqual([458, 2092, 1200].map((v) => DChart.niceScale(v).max), [480, 2400, 1200]);
+  assert.equal(DChart.money(1250, "USD", true), "$1.3K");
+  await mount(dchart({ revenue: revenueOf({ wishlist: [1200, 0, 0], notifyMe: [0, 0, 0], total: 1200 }) }));
+  const ticks = [...container.querySelectorAll(".kv-bars text")].map((n) => n.textContent).filter((t) => t.startsWith("$"));
+  assert.deepEqual(ticks, ["$0", "$300", "$600", "$900", "$1.2K"]);
   await unmount();
 });

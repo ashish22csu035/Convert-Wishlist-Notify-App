@@ -6,7 +6,7 @@ import { getOnboarding, saveOnboardingIntent } from "../models/settings.server";
 import { SetupChecklist } from "../components/setup-checklist";
 import { getAttribution, getDashboard, hasOrderScope } from "../models/reporting.server";
 import { describeItem, fetchCatalog } from "../models/catalog.server";
-import { ActivitySwitch } from "../components/activity-switch";
+import { DashboardChart } from "../components/dashboard-chart";
 import { describePeriod } from "../utils/period";
 import {
   Card,
@@ -120,11 +120,16 @@ export default function Dashboard() {
       {setup ? <SetupChecklist setup={setup} /> : null}
 
       <Split>
-        <Card title="Activity" action={{ to: "/app/analytics", label: "View analytics" }}>
+        <Card title="Performance" action={{ to: "/app/analytics", label: "View analytics" }}>
           {nothingYet ? (
             <EmptyState heading="No activity yet">Wishlist and Notify Me activity will appear here once customers use them.</EmptyState>
           ) : (
-            <ActivitySwitch series={d.series} rangeLabel={words.label} />
+            <DashboardChart
+              revenue={d.revenueSeries}
+              interest={{ days: d.series.days, wishlist: d.series.values.WISHLIST_ADDED, notifyMe: d.series.values.NOTIFY_SUBSCRIBED }}
+              revenueAvailable={d.attribution.state === "ready"}
+              rangeLabel={words.label}
+            />
           )}
         </Card>
         <Card title="Recent activity" action={{ to: "/app/wishlist?tab=activity", label: "View Wishlist log" }}>

@@ -129,7 +129,7 @@ test("chart and funnel colours: features keep their colour, series never share o
 });
 
 test("no page-specific colours are hard-coded in the components or merchant routes", () => {
-  for (const file of ["app/components/merchant-ui.jsx", "app/components/toggle-kpi-card.jsx", "app/components/activity-chart.jsx", "app/components/activity-switch.jsx", "app/components/product-funnel.jsx", "app/components/settings-form.jsx", "app/routes/app._index.jsx", "app/routes/app.analytics.jsx", "app/routes/app.customers.jsx", "app/routes/app.notify-me.jsx", "app/routes/app.settings.jsx", "app/routes/app.wishlist.jsx"]) {
+  for (const file of ["app/components/merchant-ui.jsx", "app/components/toggle-kpi-card.jsx", "app/components/activity-chart.jsx", "app/components/activity-switch.jsx", "app/components/dashboard-chart.jsx", "app/components/product-funnel.jsx", "app/components/settings-form.jsx", "app/routes/app._index.jsx", "app/routes/app.analytics.jsx", "app/routes/app.customers.jsx", "app/routes/app.notify-me.jsx", "app/routes/app.settings.jsx", "app/routes/app.wishlist.jsx"]) {
     const source = fs.readFileSync(file, "utf8");
     assert.equal(/#[0-9a-fA-F]{3,6}\b/.test(source.replace(/&#\d+;/g, "")), false, `${file} has a hard-coded colour`);
   }
