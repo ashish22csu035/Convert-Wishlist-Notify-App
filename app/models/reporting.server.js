@@ -368,8 +368,9 @@ export async function getAnalyticsOverview(shop, input = DEFAULT_DAYS, now = new
 // null (unavailable) when no day is usable.
 //   range    the selected dates: Wishlist added to cart, Notify Me restock emails sent, checkouts per feature.
 //   allTime  from the shop's first day to today, whatever the selected dates: Wishlist save events (WISHLIST_ADDED, a
-//            count of saves, not of products saved now) and Notify Me subscriptions ever created (rows keep existing
-//            after they are fulfilled or unsubscribed).
+//            count of saves, not of products saved now) and Notify Me sign-ups ever made: the SAME NOTIFY_SUBSCRIBED events the
+//            "Notify Me subscriptions" KPI counts, so the all-time figure can never be below a date-ranged one. (A subscription row
+//            is reused when a customer signs up again for a variant after it was fulfilled or cancelled, so rows undercount sign-ups.)
 //   lastUpdated  when the newest of those summary days was calculated (the data can be up to one worker run behind).
 // `to` is exclusive; null means "through today".
 export async function getFunnelSummary(shop, period, now = new Date()) {
@@ -384,7 +385,7 @@ export async function getFunnelSummary(shop, period, now = new Date()) {
       where: { shopId: shop.id, day: { gte: new Date(start), lt: new Date(end) }, wishlistAddedToCart: { not: null } },
       _count: { _all: true },
       _max: { updatedAt: true },
-      _sum: { wishlistAdded: true, restockEmailSent: true, wishlistAddedToCart: true, notifySubscriptionsCreated: true, wishlistCheckouts: true, notifyCheckouts: true },
+      _sum: { wishlistAdded: true, notifySubscribed: true, restockEmailSent: true, wishlistAddedToCart: true, wishlistCheckouts: true, notifyCheckouts: true },
     });
     const availableDays = agg._count._all;
     return { expectedDays, availableDays, complete: availableDays === expectedDays, none: false, sums: agg._sum, updated: agg._max.updatedAt };
@@ -417,7 +418,7 @@ export async function getFunnelSummary(shop, period, now = new Date()) {
     },
     allTime: {
       wishlistSaved: value(all, "wishlistAdded"),
-      notifySubscriptions: value(all, "notifySubscriptionsCreated"),
+      notifySubscriptions: value(all, "notifySubscribed"), // the same sign-up events (daily notifySubscribed) as the Analytics KPI
       coverage: { expectedDays: all.expectedDays, availableDays: all.availableDays, complete: all.complete },
     },
     lastUpdated: updated ? updated.toISOString() : null,

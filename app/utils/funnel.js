@@ -10,7 +10,7 @@
 //              Checkout initiated   checkouts of a logged-in customer holding a product they added from the Wishlist in the
 //                                   last 7 days, in the selected dates (one per checkout)
 //              Attributed revenue   revenue of the matching eligible order line items, and the distinct orders they sit on
-//   Notify Me  Total subscriptions  every subscription ever created, active or not, all time (rows)
+//   Notify Me  Total subscriptions  every sign-up ever made, active or not, all time (the same sign-up events as the Analytics KPI)
 //              Restock emails sent  emails the mail server accepted, in the selected dates (queued, failed, skipped and
 //                                   unknown deliveries never count)
 //              Added to cart        the emailed variant added to the cart after the customer came from the email's link (one per

@@ -146,7 +146,8 @@ test("funnel summary: every stage is aggregated from its own source, with the ri
   await event("WISHLIST_ADDED_TO_CART", "2026-10-04T00:00:00Z"); // after
   // restock emails: only the accepted one has the event
   await event("RESTOCK_EMAIL_SENT", "2026-10-03T12:00:00Z");
-  // subscriptions: active, fulfilled and unsubscribed ones are all "ever created"
+  // sign-ups: active, fulfilled and unsubscribed ones are all counted (each sign-up is a NOTIFY_SUBSCRIBED event, as in the KPI)
+  for (const created of ["2026-09-01T10:00:00Z", "2026-10-02T10:00:00Z", "2026-10-03T10:00:00Z"]) await event("NOTIFY_SUBSCRIBED", created);
   const subs = [];
   for (const [i, [status, created]] of [["ACTIVE", "2026-09-01T10:00:00Z"], ["FULFILLED", "2026-10-02T10:00:00Z"], ["UNSUBSCRIBED", "2026-10-03T10:00:00Z"]].entries()) {
     const other = await prisma.actor.create({ data: { shopId: shop.id, customerGid: `gid://shopify/Customer/${(counter += 1)}` } });
@@ -171,7 +172,7 @@ test("funnel summary: every stage is aggregated from its own source, with the ri
   assert.deepEqual({ ...result.range, coverage: undefined }, { wishlistAddedToCart: 2, restockEmailsSent: 1, wishlistCheckouts: 2, notifyCheckouts: 1, notifyAddedToCart: 0, coverage: undefined });
   assert.deepEqual(result.range.coverage, { expectedDays: 2, availableDays: 2, complete: true });
   assert.equal(result.allTime.wishlistSaved, 3, "all three saves, whatever the dates; the removal is not a save");
-  assert.equal(result.allTime.notifySubscriptions, 3, "active, fulfilled and unsubscribed subscriptions are all counted");
+  assert.equal(result.allTime.notifySubscriptions, 3, "active, fulfilled and unsubscribed sign-ups are all counted");
   assert.ok(result.lastUpdated, "the screen can say when the summaries were calculated");
   assert.equal(await prisma.emailDelivery.count({ where: { shopId: shop.id } }), 6, "six deliveries exist; only the accepted one is a sent email");
 
