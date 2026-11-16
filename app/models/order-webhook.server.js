@@ -102,7 +102,7 @@ export function parseOrder(payload) {
 }
 
 // Returns { event } when this delivery owns the work, or { skip: "duplicate" | "in_progress" }.
-async function claimEvent({ shopDomain, shopId, topic, key, webhookId, orderGid, triggeredAt }) {
+export async function claimEvent({ shopDomain, shopId, topic, key, webhookId, orderGid, triggeredAt }) {
   const data = { shopDomain, shopId, topic, dedupeKey: key, webhookId, resourceGid: orderGid, triggeredAt, status: "RECEIVED", attempts: 1 };
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {

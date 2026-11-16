@@ -442,6 +442,7 @@ export const EVENT = {
   NOTIFY_UNSUBSCRIBED: { label: "Unsubscribed from Notify Me", verb: "stopped notifications for", suffix: "", icon: "notification", tone: "neutral" },
   RESTOCK_EMAIL_SENT: { label: "Restock email sent", verb: "Restock email sent for", suffix: "", icon: "email", tone: "green" },
   WISHLIST_ADDED_TO_CART: { label: "Added to cart from Wishlist", verb: "added", suffix: "to their cart from their Wishlist", icon: "cart", tone: "green" },
+  NOTIFY_ADDED_TO_CART: { label: "Added to cart from restock email", verb: "added", suffix: "to their cart from a restock email", icon: "cart", tone: "green" },
   RESTOCK_EMAIL_CLICKED: { label: "Restock email clicked", verb: "clicked the restock email for", suffix: "", icon: "email", tone: "green" },
 };
 

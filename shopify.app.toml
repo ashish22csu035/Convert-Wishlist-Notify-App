@@ -57,6 +57,16 @@ api_version = "2027-01"
   uri = "/webhooks/orders/updated"
   topics = [ "orders/updated" ]
 
+  # Product Funnel "Checkout initiated" (needs read_orders): a checkout was created by a logged-in customer.
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/checkouts/create"
+  topics = [ "checkouts/create" ]
+
+  # The signed-in buyer is not always attached when a checkout is created: its updates carry the customer id.
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/checkouts/update"
+  topics = [ "checkouts/update" ]
+
 [app_proxy]
 url = "/proxy"
 subpath = "konvert-notify"

@@ -144,7 +144,16 @@ test("a failing day or shop does not stop the others and is retried on the next 
     return real(shopId, day);
   };
   const errors = [];
-  const summary = await worker.runAnalyticsDaily({ now: () => NOW, shopIds: [a.id, b.id], calculate, log: { log() {}, error: (m) => errors.push(m) } });
+  // Production logs carry the error code only; development (or ANALYTICS_DEBUG=1) adds the cause: see analytics-diagnostics.test.mjs.
+  const savedEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  let summary;
+  try {
+    summary = await worker.runAnalyticsDaily({ now: () => NOW, shopIds: [a.id, b.id], calculate, log: { log() {}, error: (m) => errors.push(m) } });
+  } finally {
+    if (savedEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = savedEnv;
+  }
   assert.deepEqual([summary.written, summary.failed], [5, 1 + 6]);
   assert.ok(!(await days(a)).includes("2026-10-19"));
   assert.equal((await days(b)).length, 0);

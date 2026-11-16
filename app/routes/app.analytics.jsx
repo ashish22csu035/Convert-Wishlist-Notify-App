@@ -1,7 +1,8 @@
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { loadMerchantContext } from "../utils/merchant.server";
-import { getAttribution, hasOrderScope } from "../models/reporting.server";
+import { getAttribution, getFunnelSummary, hasOrderScope } from "../models/reporting.server";
+import { resolvePeriod } from "../utils/period";
 import { maskedCustomerEmails } from "../models/customer-emails.server";
 import { getCachedAnalyticsOverview } from "../models/analytics-cache.server";
 import { describeItem, fetchCatalog } from "../models/catalog.server";
@@ -13,14 +14,19 @@ import { Card, CustomerLink, EmptyState, Grid, KpiCard, MerchantErrorBoundary, N
 export const loader = async ({ request }) => {
   const { admin, scope, shop, days, period, view } = await loadMerchantContext(request);
   if (!shop) return { days, period: view, analytics: null };
-  const [analytics, attribution] = await Promise.all([getCachedAnalyticsOverview(shop, period), getAttribution(shop.id, period, { scopeGranted: hasOrderScope(scope) })]);
+  const [analytics, attribution, summary] = await Promise.all([
+    getCachedAnalyticsOverview(shop, period),
+    getAttribution(shop.id, period, { scopeGranted: hasOrderScope(scope) }),
+    // A failing summary read leaves the funnels "unavailable" (never zero); the rest of the page still loads.
+    getFunnelSummary(shop, resolvePeriod(period)).catch(() => ({ range: {}, allTime: {}, lastUpdated: null })),
+  ]);
   const emails = await maskedCustomerEmails(admin, shop.id, analytics.topCustomers.map((row) => row.customerId));
   const catalog = await fetchCatalog(admin, { productGids: [...analytics.topProducts, ...(attribution.topProducts ?? [])].map((row) => row.productGid) });
-  // Both funnels use this app's own records for the same period (the counts the Dashboard uses and the shared
-  // attribution service); nothing is read from, or inferred about, store traffic.
+  // Both funnels read the stored daily summaries (getFunnelSummary: one aggregate per scope) and the shared attribution
+  // service for revenue; nothing is read from, or inferred about, store traffic.
   const funnels = {
-    wishlist: buildFeatureFunnel("wishlist", { window: analytics.activity.window, attribution }),
-    notifyMe: buildFeatureFunnel("notifyMe", { window: analytics.activity.window, attribution }),
+    wishlist: buildFeatureFunnel("wishlist", { summary, attribution }),
+    notifyMe: buildFeatureFunnel("notifyMe", { summary, attribution }),
   };
   return {
     days,

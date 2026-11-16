@@ -52,107 +52,178 @@ after(async () => {
 });
 
 // ======================= Wishlist and Notify Me funnels =======================
-const window = { WISHLIST_ADDED: 12, WISHLIST_PRODUCT_CLICKED: 5, NOTIFY_SUBSCRIBED: 8, RESTOCK_EMAIL_SENT: 6 };
+const summary = {
+  range: { wishlistAddedToCart: 5, restockEmailsSent: 6, wishlistCheckouts: 3, notifyCheckouts: 2, notifyAddedToCart: 4, coverage: { expectedDays: 30, availableDays: 30, complete: true } },
+  allTime: { wishlistSaved: 12, notifySubscriptions: 8, coverage: { expectedDays: 90, availableDays: 90, complete: true } },
+  lastUpdated: "2026-10-22T10:00:00.000Z",
+};
 const ready = { state: "ready", currency: "USD", overall: { orders: 3, revenue: "90.00" }, wishlist: { orders: 2, revenue: "60.00" }, notifyMe: { orders: 1, revenue: "30.00" } };
 
-test("Wishlist funnel: only Wishlist events and the Wishlist attribution, with no cart or checkout stage and no percentages", () => {
-  const funnel = F.buildFeatureFunnel("wishlist", { window, attribution: ready });
-  assert.deepEqual(funnel.stages.map((s) => s.label), ["Products saved", "Opened from Wishlist", "Attributed orders", "Attributed revenue"]);
-  assert.deepEqual(funnel.stages.map((s) => s.count), [12, 5, 2, 60]);
+test("Wishlist funnel: four stages in the agreed order, all-time saves first, revenue with its order count, no percentages", () => {
+  const funnel = F.buildFeatureFunnel("wishlist", { summary, attribution: ready });
+  assert.deepEqual(funnel.stages.map((s) => s.label), ["Products saved", "Added to cart", "Checkout initiated", "Attributed revenue"]);
+  assert.deepEqual(funnel.stages.map((s) => s.count), [12, 5, 3, 60]);
+  assert.deepEqual(funnel.stages.map((s) => s.scope), ["all-time", "range", "range", "range"]);
   assert.equal(funnel.stages[3].display, "$60.00");
+  assert.equal(funnel.stages[3].orders, 2);
   assert.ok(funnel.stages.every((s) => s.available && !("rate" in s)), "no conversion percentage exists on any stage");
-  assert.equal(funnel.stages.some((s) => /cart|checkout|session/i.test(s.label)), false, "no stage is borrowed from the store funnel");
-  assert.match(funnel.note, /Add to cart and checkout from the Wishlist are not tracked/);
   // the Notify Me figures never leak in, whatever their size
   assert.equal(JSON.stringify(funnel.stages).includes('"count":8'), false);
+  assert.equal(/"count":6[,}]/.test(JSON.stringify(funnel.stages)), false);
 });
 
-test("Notify Me funnel: subscriptions, emails the mail server accepted, and the Notify Me attribution", () => {
-  const funnel = F.buildFeatureFunnel("notifyMe", { window, attribution: ready });
-  assert.deepEqual(funnel.stages.map((s) => s.label), ["Subscriptions", "Restock emails sent", "Attributed orders", "Attributed revenue"]);
-  assert.deepEqual(funnel.stages.map((s) => s.count), [8, 6, 1, 30]);
-  assert.equal(funnel.stages[3].display, "$30.00");
+test("Notify Me funnel: five stages in the agreed order, with the real Notify Me cart-addition count", () => {
+  const funnel = F.buildFeatureFunnel("notifyMe", { summary, attribution: ready });
+  assert.deepEqual(funnel.stages.map((s) => s.label), ["Total subscriptions", "Restock emails sent", "Added to cart", "Checkout initiated", "Attributed revenue"]);
+  assert.deepEqual(funnel.stages.map((s) => s.count), [8, 6, 4, 2, 30]);
+  assert.deepEqual(funnel.stages.map((s) => s.scope), ["all-time", "range", "range", "range", "range"]);
+  assert.equal(funnel.stages[2].reason, null);
+  assert.ok(funnel.stages.every((s) => !("hint" in s)), "no stage carries tooltip text: the funnel shows no info icons");
+  assert.equal(funnel.stages[4].display, "$30.00");
+  assert.equal(funnel.stages[4].orders, 1);
   assert.ok(funnel.stages.every((s) => !("rate" in s)), "the stages are not a cohort, so no percentage");
-  assert.match(funnel.note, /queued, failed, skipped and unknown ones do not/);
 });
 
 test("orders and revenue are unavailable, with the reason on the stage, when order data is missing or unusable", () => {
   for (const [attribution, reason] of [[{ state: "needs_access" }, /read_orders/], [{ state: "waiting" }, /No orders have been received/], [null, /read_orders/]]) {
-    const stages = F.buildFeatureFunnel("notifyMe", { window, attribution }).stages;
-    assert.deepEqual(stages.map((s) => s.count), [8, 6, null, null], "events still count; orders are not shown as zero");
-    assert.match(stages[2].reason, reason);
+    const stages = F.buildFeatureFunnel("wishlist", { summary, attribution }).stages;
+    assert.deepEqual(stages.map((s) => s.count), [12, 5, 3, null], "events still count; revenue is not shown as zero");
     assert.match(stages[3].reason, reason);
   }
-  const mixed = F.buildFeatureFunnel("wishlist", { window, attribution: { ...ready, mixedCurrency: true, wishlist: { orders: 2, revenue: null } } }).stages;
-  assert.deepEqual(mixed.map((s) => s.count), [12, 5, 2, null], "orders are real, revenue is not added across currencies");
+  const mixed = F.buildFeatureFunnel("wishlist", { summary, attribution: { ...ready, mixedCurrency: true, wishlist: { orders: 2, revenue: null } } }).stages;
+  assert.deepEqual([mixed[3].count, mixed[3].orders], [null, 2], "orders are real, revenue is not added across currencies");
   assert.match(mixed[3].reason, /more than one currency/);
-  const confirmedZero = F.buildFeatureFunnel("notifyMe", { window, attribution: { ...ready, notifyMe: { orders: 0, revenue: "0.00" } } }).stages;
-  assert.deepEqual([confirmedZero[2].count, confirmedZero[3].count, confirmedZero[3].display], [0, 0, "$0.00"], "a confirmed zero stays a zero");
+  const confirmedZero = F.buildFeatureFunnel("notifyMe", { summary, attribution: { ...ready, notifyMe: { orders: 0, revenue: "0.00" } } }).stages;
+  assert.deepEqual([confirmedZero[4].count, confirmedZero[4].orders, confirmedZero[4].display], [0, 0, "$0.00"], "a confirmed zero stays a zero");
 });
 
-test("a funnel with no activity is empty, and unavailable stages do not count as activity", () => {
-  const none = F.buildFeatureFunnel("wishlist", { window: {}, attribution: { state: "waiting" } });
-  assert.deepEqual(none.stages.map((s) => s.count), [null, null, null, null], "missing event counts are unavailable, not zero");
+test("empty store: missing summaries are unavailable (not zero), real zeros are zeros, and an all-zero funnel is empty", () => {
+  const none = F.buildFeatureFunnel("wishlist", { summary: { range: {}, allTime: {} }, attribution: { state: "waiting" } });
+  assert.deepEqual(none.stages.map((s) => s.count), [null, null, null, null], "days the worker has not calculated are unavailable, not zero");
+  assert.match(none.stages[0].reason, /Not calculated yet/);
   assert.equal(F.isEmptyFunnel(none.stages), true);
-  const zero = F.buildFeatureFunnel("notifyMe", { window: { NOTIFY_SUBSCRIBED: 0, RESTOCK_EMAIL_SENT: 0 }, attribution: ready });
-  assert.equal(F.isEmptyFunnel(F.buildFeatureFunnel("notifyMe", { window: { NOTIFY_SUBSCRIBED: 0, RESTOCK_EMAIL_SENT: 0 }, attribution: { ...ready, notifyMe: { orders: 0, revenue: "0.00" } } }).stages), true);
-  assert.equal(F.isEmptyFunnel(zero.stages), false, "an attributed order alone is activity");
+  const nothing = F.buildFeatureFunnel("wishlist", { summary: null, attribution: null });
+  assert.deepEqual(nothing.stages.map((s) => s.count), [null, null, null, null], "no summary at all is unavailable");
+  const zeros = { range: { wishlistAddedToCart: 0, restockEmailsSent: 0, wishlistCheckouts: 0, notifyCheckouts: 0, notifyAddedToCart: 0 }, allTime: { wishlistSaved: 0, notifySubscriptions: 0 } };
+  const zeroFunnel = F.buildFeatureFunnel("notifyMe", { summary: zeros, attribution: { ...ready, notifyMe: { orders: 0, revenue: "0.00" } } });
+  assert.deepEqual(zeroFunnel.stages.map((s) => s.count), [0, 0, 0, 0, 0], "tracking is operational and nothing qualified: a real zero");
+  const uncalculated = F.buildFeatureFunnel("notifyMe", { summary: { ...zeros, range: { ...zeros.range, notifyAddedToCart: null } }, attribution: ready });
+  assert.equal(uncalculated.stages[2].count, null, "a day not calculated yet is unavailable, not zero");
+  assert.match(uncalculated.stages[2].reason, /Not calculated yet/);
+  assert.equal(F.isEmptyFunnel(zeroFunnel.stages), true, "real zeros everywhere");
+  assert.equal(F.isEmptyFunnel(F.buildFeatureFunnel("notifyMe", { summary: zeros, attribution: ready }).stages), false, "an attributed order alone is activity");
 });
 
-// ======================= the funnels follow the date range (real database) =======================
-const makeShop = async (tag) => {
+test("a summary with missing days is flagged as partial so the screen can say the figures are a lower bound", () => {
+  const partial = { ...summary, range: { ...summary.range, coverage: { expectedDays: 30, availableDays: 12, complete: false } } };
+  assert.equal(F.buildFeatureFunnel("wishlist", { summary: partial, attribution: ready }).partial, true);
+  assert.equal(F.buildFeatureFunnel("wishlist", { summary, attribution: ready }).partial, false);
+});
+
+// ======================= the summaries: ETL -> AnalyticsDaily -> getFunnelSummary (real database) =======================
+// A recent install date keeps the ETL's day-by-day backfill short (it works through every day since the install).
+const makeShop = async (tag, installedAt = "2026-09-28T00:00:00Z") => {
   const domain = `kw-funnel-${tag}-${RUN}.myshopify.com`;
   domains.push(domain);
-  return prisma.shop.create({ data: { domain, currencyCode: "USD", installedAt: at("2026-01-01T00:00:00Z") } });
+  return prisma.shop.create({ data: { domain, currencyCode: "USD", installedAt: at(installedAt) } });
 };
+const runEtl = (shop, now = NOW) => analyticsWorker.runAnalyticsDaily({ now: () => now, shopIds: [shop.id], backfillPerShop: 400, log: { log() {}, error() {} }, invalidate: async () => {} });
 
-test("both feature funnels count exactly the selected days, and only emails that were accepted are 'sent'", async () => {
-  const shop = await makeShop("range");
+test("funnel summary: every stage is aggregated from its own source, with the right date scope", async () => {
+  const shop = await makeShop("range", "2026-08-10T00:00:00Z");
   const actor = await prisma.actor.create({ data: { shopId: shop.id, customerGid: `gid://shopify/Customer/${(counter += 1)}` } });
   const variantGid = "gid://shopify/ProductVariant/77";
   const event = (type, iso) => prisma.activityEvent.create({ data: { shopId: shop.id, actorId: actor.id, type, feature: type.startsWith("WISHLIST") ? "WISHLIST" : "NOTIFY_ME", productGid: "gid://shopify/Product/1", variantGid, occurredAt: at(iso) } });
-  await event("WISHLIST_ADDED", "2026-10-01T23:59:59Z"); // before
+  // Wishlist saves: all time (the Aug one is outside the selected dates but still counts)
+  await event("WISHLIST_ADDED", "2026-08-15T10:00:00Z");
   await event("WISHLIST_ADDED", "2026-10-02T00:00:00Z");
-  await event("WISHLIST_ADDED", "2026-10-03T23:59:59Z");
-  await event("WISHLIST_ADDED", "2026-10-04T00:00:00Z"); // after
-  await event("WISHLIST_PRODUCT_CLICKED", "2026-10-03T08:00:00Z");
-  await event("WISHLIST_REMOVED", "2026-10-03T09:00:00Z"); // not a funnel stage
-  await event("NOTIFY_SUBSCRIBED", "2026-10-02T12:00:00Z");
-  await event("NOTIFY_SUBSCRIBED", "2026-10-09T12:00:00Z"); // after
-  const sentEvent = await event("RESTOCK_EMAIL_SENT", "2026-10-03T12:00:00Z");
-
-  // deliveries in every state: only the accepted one has the RESTOCK_EMAIL_SENT event the funnel reads
-  await prisma.variantAvailability.create({ data: { shopId: shop.id, variantGid, productGid: "gid://shopify/Product/1", inventoryItemGid: "gid://shopify/InventoryItem/77", isInStock: true, restockCycle: 6 } });
-  const sub = await prisma.notifySubscription.create({ data: { shopId: shop.id, actorId: actor.id, productGid: "gid://shopify/Product/1", variantGid, email: "customer@example.invalid", baselineCycle: 0, consentedAt: at("2026-10-01T00:00:00Z"), consentSource: "test" } });
-  for (const [cycle, status] of [[1, "SENT"], [2, "PENDING"], [3, "FAILED"], [4, "SKIPPED"], [5, "UNKNOWN"], [6, "SENDING"]]) {
-    await prisma.emailDelivery.create({ data: { shopId: shop.id, subscriptionId: sub.id, restockCycle: cycle, variantGid, status, createdAt: at("2026-10-03T00:00:00Z") } });
+  await event("WISHLIST_ADDED", "2026-10-04T00:00:00Z");
+  await event("WISHLIST_REMOVED", "2026-10-03T09:00:00Z"); // not a stage
+  // cart additions: filtered by date
+  await event("WISHLIST_ADDED_TO_CART", "2026-10-01T23:59:59Z"); // before
+  await event("WISHLIST_ADDED_TO_CART", "2026-10-02T09:00:00Z");
+  await event("WISHLIST_ADDED_TO_CART", "2026-10-03T23:59:59Z");
+  await event("WISHLIST_ADDED_TO_CART", "2026-10-04T00:00:00Z"); // after
+  // restock emails: only the accepted one has the event
+  await event("RESTOCK_EMAIL_SENT", "2026-10-03T12:00:00Z");
+  // subscriptions: active, fulfilled and unsubscribed ones are all "ever created"
+  const subs = [];
+  for (const [i, [status, created]] of [["ACTIVE", "2026-09-01T10:00:00Z"], ["FULFILLED", "2026-10-02T10:00:00Z"], ["UNSUBSCRIBED", "2026-10-03T10:00:00Z"]].entries()) {
+    const other = await prisma.actor.create({ data: { shopId: shop.id, customerGid: `gid://shopify/Customer/${(counter += 1)}` } });
+    subs.push(await prisma.notifySubscription.create({ data: { shopId: shop.id, actorId: other.id, productGid: "gid://shopify/Product/1", variantGid: `gid://shopify/ProductVariant/9${i}`, email: "customer@example.invalid", status, consentedAt: at(created), consentSource: "test", createdAt: at(created), unsubscribedAt: status === "UNSUBSCRIBED" ? at(created) : null } }));
   }
+  for (const [cycle, status] of [[1, "SENT"], [2, "PENDING"], [3, "FAILED"], [4, "SKIPPED"], [5, "UNKNOWN"], [6, "SENDING"]]) {
+    await prisma.emailDelivery.create({ data: { shopId: shop.id, subscriptionId: subs[0].id, restockCycle: cycle, variantGid, status, createdAt: at("2026-10-03T00:00:00Z") } });
+  }
+  // checkouts per feature
+  const checkout = (feature, key, iso) => prisma.checkoutAttribution.create({ data: { shopId: shop.id, actorId: actor.id, checkoutKey: key, feature, startedAt: at(iso) } });
+  await checkout("WISHLIST", "c1", "2026-10-02T10:00:00Z");
+  await checkout("WISHLIST", "c2", "2026-10-03T10:00:00Z");
+  await checkout("WISHLIST", "c3", "2026-10-05T10:00:00Z"); // after
+  await checkout("NOTIFY_ME", "c1", "2026-10-02T10:00:00Z"); // the same checkout may serve both journeys
+  await checkout("NOTIFY_ME", "c9", "2026-09-20T10:00:00Z"); // before
 
-  // one Wishlist and one Notify Me purchase inside the range, one Wishlist purchase outside
-  let n = 0;
-  const attributed = async (feature, placedAt, amount, touchEventId) => {
-    n += 1;
-    const order = await prisma.shopifyOrder.create({ data: { shopId: shop.id, orderGid: `gid://shopify/Order/${RUN}${n}`, orderName: `#${n}`, customerGid: actor.customerGid, placedAt: at(placedAt), financialStatus: "PAID", currencyCode: "USD", totalPrice: amount, shopifyUpdatedAt: at(placedAt) } });
-    await prisma.orderAttribution.create({ data: { shopId: shop.id, orderId: order.id, feature, touchEventId, touchedAt: at("2026-10-02T00:00:00Z"), matchedProductGid: "gid://shopify/Product/1", grossAmount: amount, currencyCode: "USD" } });
-  };
-  await attributed("WISHLIST", "2026-10-03T10:00:00Z", 25, null);
-  await attributed("NOTIFY_ME", "2026-10-03T11:00:00Z", 40, sentEvent.id);
-  await attributed("WISHLIST", "2026-10-06T10:00:00Z", 99, null);
-
-  const { period } = P.customPeriod("2026-10-02", "2026-10-03", NOW);
+  const first = await runEtl(shop);
+  assert.equal(first.failed, 0);
   const ref = await reporting.getShopByDomain(shop.domain);
-  const analytics = await reporting.getAnalytics(ref, period, NOW);
-  const attribution = await reporting.getAttribution(shop.id, period, { scopeGranted: true, now: NOW });
+  const { period } = P.customPeriod("2026-10-02", "2026-10-03", NOW);
+  const result = await reporting.getFunnelSummary(ref, period, NOW);
+  assert.deepEqual({ ...result.range, coverage: undefined }, { wishlistAddedToCart: 2, restockEmailsSent: 1, wishlistCheckouts: 2, notifyCheckouts: 1, notifyAddedToCart: 0, coverage: undefined });
+  assert.deepEqual(result.range.coverage, { expectedDays: 2, availableDays: 2, complete: true });
+  assert.equal(result.allTime.wishlistSaved, 3, "all three saves, whatever the dates; the removal is not a save");
+  assert.equal(result.allTime.notifySubscriptions, 3, "active, fulfilled and unsubscribed subscriptions are all counted");
+  assert.ok(result.lastUpdated, "the screen can say when the summaries were calculated");
+  assert.equal(await prisma.emailDelivery.count({ where: { shopId: shop.id } }), 6, "six deliveries exist; only the accepted one is a sent email");
 
-  const wishlist = F.buildFeatureFunnel("wishlist", { window: analytics.activity.window, attribution });
-  assert.deepEqual(wishlist.stages.map((s) => s.count), [2, 1, 1, 25], "saves and opens inside the range; removals are not a stage; the outside purchase is excluded");
-  const notify = F.buildFeatureFunnel("notifyMe", { window: analytics.activity.window, attribution });
-  assert.deepEqual(notify.stages.map((s) => s.count), [1, 1, 1, 40], "one accepted email, not six deliveries");
-  assert.equal(await prisma.emailDelivery.count({ where: { shopId: shop.id } }), 6, "the other five deliveries exist but are not counted as sent");
+  // a wider date selection: the all-time stages do not move, the filtered ones do
+  const wide = await reporting.getFunnelSummary(ref, P.presetPeriod(30, NOW), NOW);
+  assert.equal(wide.allTime.wishlistSaved, 3);
+  assert.equal(wide.range.wishlistAddedToCart, 4, "every cart addition up to now");
 
-  // a preset covers everything to now and the numbers move accordingly
-  const wide = await reporting.getAnalytics(ref, 30, NOW);
-  assert.equal(F.buildFeatureFunnel("wishlist", { window: wide.activity.window, attribution: await reporting.getAttribution(shop.id, 30, { scopeGranted: true, now: NOW }) }).stages[0].count, 4, "all four saves up to now");
+  // a subscription that becomes inactive is still counted, and re-running the ETL never double counts
+  await prisma.notifySubscription.update({ where: { id: subs[0].id }, data: { status: "UNSUBSCRIBED", unsubscribedAt: at("2026-10-10T00:00:00Z") } });
+  await runEtl(shop);
+  await runEtl(shop);
+  const again = await reporting.getFunnelSummary(ref, period, NOW);
+  assert.deepEqual([again.range.wishlistAddedToCart, again.range.wishlistCheckouts, again.range.notifyCheckouts, again.allTime.wishlistSaved, again.allTime.notifySubscriptions], [2, 2, 1, 3, 3]);
+});
+
+test("funnel summary: days without the funnel columns are unavailable (never zero) until the worker calculates them, and an empty store is a confirmed zero", async () => {
+  const shop = await makeShop("legacy");
+  const ref = await reporting.getShopByDomain(shop.domain);
+  const { period } = P.customPeriod("2026-10-02", "2026-10-03", NOW);
+  // an old-format row: finished for the old metrics, the funnel columns NULL
+  await prisma.analyticsDaily.create({ data: { shopId: shop.id, day: at("2026-10-02T00:00:00Z"), wishlistAdded: 4, notifyUnsubscribed: 0, updatedAt: at("2026-10-02T12:00:00Z") } });
+  const before = await reporting.getFunnelSummary(ref, period, NOW);
+  assert.equal(before.range.wishlistAddedToCart, null, "not calculated yet is unavailable, not zero");
+  assert.equal(before.allTime.wishlistSaved, null);
+  assert.equal(before.range.coverage.complete, false);
+  // the worker treats such a row as needing a calculation and fills the funnel columns
+  await runEtl(shop);
+  const after = await reporting.getFunnelSummary(ref, period, NOW);
+  assert.deepEqual([after.range.wishlistAddedToCart, after.range.wishlistCheckouts, after.allTime.wishlistSaved, after.allTime.notifySubscriptions], [0, 0, 0, 0], "an empty store: confirmed zeros");
+  assert.equal(after.range.coverage.complete, true);
+  // a range that ends before the shop existed has nothing to count: a confirmed zero
+  const early = await reporting.getFunnelSummary({ ...ref, installedAt: at("2026-10-20T00:00:00Z") }, P.customPeriod("2026-10-01", "2026-10-02", NOW).period, NOW);
+  assert.equal(early.range.wishlistAddedToCart, 0);
+});
+
+test("ETL failure handling: a day that fails is reported and keeps its previous summary", async () => {
+  const shop = await makeShop("fail");
+  await runEtl(shop);
+  const ref = await reporting.getShopByDomain(shop.domain);
+  const { period } = P.customPeriod("2026-10-01", "2026-10-02", NOW);
+  const good = await reporting.getFunnelSummary(ref, period, NOW);
+  const run = await analyticsWorker.runAnalyticsDaily({
+    now: () => new Date(NOW.getTime() + 60 * 60 * 1000),
+    shopIds: [shop.id],
+    log: { log() {}, error() {} },
+    calculate: async () => {
+      throw new Error("boom");
+    },
+  });
+  assert.ok(run.failed > 0 && run.written === 0);
+  assert.deepEqual((await reporting.getFunnelSummary(ref, period, NOW)).range, good.range, "the last good summary is still what the funnel shows");
 });
 
 // ======================= the page =======================
@@ -167,7 +238,7 @@ test("Analytics page source: the four KPIs, the selector over the two funnels, a
   assert.ok(source.indexOf('label="Wishlist sessions"') < source.indexOf('<Card title="Product funnel">'), "directly below the four, above the funnel");
   assert.equal((sessionGrid.match(/Actions close together count once/g) ?? []).length, 2, "both tooltips say what is counted");
   assert.match(source, /<FunnelSwitch funnels={funnels} rangeLabel={words\.label} \/>/);
-  assert.match(source, /buildFeatureFunnel\("wishlist", \{ window: analytics\.activity\.window, attribution \}\)/, "the existing dashboard counts and attribution service are reused");
+  assert.match(source, /buildFeatureFunnel\("wishlist", \{ summary, attribution \}\)/, "the stored daily summaries and the shared attribution service are used");
   for (const gone of [
     "Store conversion", "storeFunnel", "fetchStoreFunnel", "buildStoreFunnel", "ProductFunnel", "Sessions", "Checkout initiated",
     "Unique Wishlist users", "Average saved items per customer", "Emails accepted by mail server",
@@ -271,7 +342,7 @@ test("no stage carries helper text, in either funnel and whatever the data", asy
   for (const phrase of phrases) assert.equal(funnelSource.includes(phrase), false, phrase);
   for (const attribution of [ready, { state: "waiting" }, { ...ready, mixedCurrency: true, wishlist: { orders: 2, revenue: null }, notifyMe: { orders: 2, revenue: null } }]) {
     for (const feature of ["wishlist", "notifyMe"]) {
-      for (const item of F.buildFeatureFunnel(feature, { window, attribution }).stages) assert.equal("caption" in item, false, `${feature}/${item.key} has no caption`);
+      for (const item of F.buildFeatureFunnel(feature, { summary, attribution }).stages) assert.equal("caption" in item, false, `${feature}/${item.key} has no caption`);
     }
   }
 });
@@ -327,7 +398,7 @@ async function seedBusyShop(tag, installedAt, { unattributed = false } = {}) {
   }
   const order = await prisma.shopifyOrder.create({ data: { shopId: shop.id, orderGid: `gid://shopify/Order/${RUN}${tag}`, orderName: "#1", customerGid: actors[0].customerGid, placedAt: utc(3, 12), financialStatus: "PAID", currencyCode: "USD", totalPrice: 50, shopifyUpdatedAt: utc(3, 12) } });
   await prisma.orderAttribution.create({ data: { shopId: shop.id, orderId: order.id, feature: "WISHLIST", touchedAt: utc(4, 1), matchedProductGid: "gid://shopify/Product/1", grossAmount: 30, currencyCode: "USD" } });
-  await analyticsWorker.runAnalyticsDaily({ now: () => NOW, shopIds: [shop.id], backfillPerShop: 400, log: { log() {}, error() {} } });
+  await analyticsWorker.runAnalyticsDaily({ now: () => NOW, shopIds: [shop.id], backfillPerShop: 400, log: { log() {}, error() {} }, invalidate: async () => {} });
   return shop;
 }
 
@@ -418,7 +489,7 @@ test("lightweight loader: far fewer SQL statements than getAnalytics for the sam
 
 test("Analytics route loads through the cached getAnalyticsOverview and runs its two independent reads together; getDashboard is unchanged for the other pages", () => {
   const source = fs.readFileSync("app/routes/app.analytics.jsx", "utf8");
-  assert.match(source, /Promise\.all\(\[getCachedAnalyticsOverview\(shop, period\), getAttribution\(shop\.id, period,/); // the cache wraps getAnalyticsOverview (analytics-cache.server.js)
+  assert.match(source, /Promise\.all\(\[\s*getCachedAnalyticsOverview\(shop, period\),\s*getAttribution\(shop\.id, period,/); // the cache wraps getAnalyticsOverview (analytics-cache.server.js)
   assert.equal(source.includes("getAnalytics("), false, "the heavy loader is no longer used by this screen");
   for (const file of ["app/routes/app._index.jsx"]) assert.ok(fs.readFileSync(file, "utf8").includes("getDashboard(shop, period)"), `${file} still uses getDashboard`);
 });

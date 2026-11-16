@@ -41,6 +41,7 @@ const { queueSnapshot } = await import("../app/models/email-delivery.server.js")
 const { getShopAdmin } = await import("../app/models/shopify-lookup.server.js");
 const { recoverInventoryEvents } = await import("../app/models/inventory-webhook.server.js");
 const { runAnalyticsDaily } = await import("../app/worker/analytics-daily.server.js");
+const { checkSchemaDrift, driftMessages } = await import("../app/worker/schema-drift.server.js");
 const { closeCache } = await import("../app/utils/cache.server.js");
 const { default: prisma } = await import("../app/db.server.js");
 
@@ -68,6 +69,12 @@ process.on("SIGINT", () => onSignal("SIGINT"));
 process.on("SIGTERM", () => onSignal("SIGTERM"));
 
 console.log("[worker] started (one-shot): sending queued emails that are due, then exiting");
+// Is this image older (or newer) than the database it talks to? Read-only; a problem here is a warning, never a stop.
+try {
+  for (const line of driftMessages(await checkSchemaDrift(prisma))) console.warn(`[worker] WARNING: ${line}`);
+} catch (error) {
+  console.warn(`[worker] could not compare this build with the database migrations: ${error?.code ?? error?.name ?? "error"}`);
+}
 let exitCode = 0;
 try {
   const { handled, outcomes } = await worker.drain();

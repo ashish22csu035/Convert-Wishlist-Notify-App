@@ -159,10 +159,10 @@ export async function processJob(job, ctx) {
   const retryLater = async (reason, notBeforeMs = 0) => {
     if (job.attempts >= MAX_ATTEMPTS) {
       // Nothing was sent, so no message id or unsubscribe token is kept for it.
-      await settle(job.id, { status: "FAILED", errorCode: reason, outboundMessageId: null, linkTokenHash: null });
+      await settle(job.id, { status: "FAILED", errorCode: reason, outboundMessageId: null, linkTokenHash: null, cartTokenHash: null });
       return "FAILED";
     }
-    await settle(job.id, { status: "PENDING", errorCode: reason, nextAttemptAt: new Date(now().getTime() + Math.max(backoffMs(job.attempts), notBeforeMs)), outboundMessageId: null, linkTokenHash: null });
+    await settle(job.id, { status: "PENDING", errorCode: reason, nextAttemptAt: new Date(now().getTime() + Math.max(backoffMs(job.attempts), notBeforeMs)), outboundMessageId: null, linkTokenHash: null, cartTokenHash: null });
     return "PENDING";
   };
 
@@ -193,6 +193,7 @@ export async function processJob(job, ctx) {
 
   // The link's token and the message id exist only for this attempt, and are saved BEFORE the SMTP call.
   const token = newToken();
+  const cartToken = newToken(); // for the product link's ?kw_n=: a different secret from the unsubscribe token
   const messageId = `<${crypto.randomUUID()}@${new URL(config.baseUrl).hostname}>`;
   const mail = buildRestockEmail({
     shop,
@@ -203,12 +204,13 @@ export async function processJob(job, ctx) {
     mailFrom: config.mailFrom,
     unsubscribeLink: unsubscribeUrl(config.baseUrl, token),
     messageId,
+    cartToken,
   });
   if (!mail) return skip("product_unavailable"); // no title or no safe link: never sent with invented details
 
   const marked = await prisma.emailDelivery.updateMany({
     where: { id: job.id, status: "SENDING" },
-    data: { outboundMessageId: messageId, linkTokenHash: hashToken(token), leaseExpiresAt: new Date(now().getTime() + leaseMs) },
+    data: { outboundMessageId: messageId, linkTokenHash: hashToken(token), cartTokenHash: hashToken(cartToken), leaseExpiresAt: new Date(now().getTime() + leaseMs) },
   });
   if (marked.count !== 1) return "LEASE_LOST"; // someone else owns it now; send nothing
 

@@ -39,6 +39,7 @@
   --kv-tone-2: #404040;
   --kv-tone-3: #737373;
   --kv-tone-4: #b3b3b3;
+  --kv-tone-5: #d4d4d4;
 
   color: var(--kv-text);
   color-scheme: light; /* native controls (date picker, scrollbars) and Polaris components stay light, whatever the browser prefers */
@@ -745,20 +746,33 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
 .kv-funnel {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* one row per kind of content, shared by every stage (see .kv-funnel-stage): the shapes of all stages sit on the same
+     line, so each stage's edge meets the next one's exactly, whatever a stage holds above or below its shape */
+  grid-template-rows: repeat(6, auto);
   gap: 0;
   align-items: stretch;
   padding: 8px 4px 4px;
 }
 .kv-funnel-stage {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-row: 1 / span 6;
+  grid-template-rows: subgrid;
+  row-gap: 2px;
   padding: 0 12px;
   min-width: 0;
 }
-.kv-funnel-stage + .kv-funnel-stage {
-  border-inline-start: 1px dashed var(--kv-border);
+.kv-funnel-head { grid-row: 1; }
+.kv-funnel-scope { grid-row: 2; }
+.kv-funnel-count { grid-row: 3; }
+.kv-funnel-sub { grid-row: 4; }
+.kv-funnel-shape { grid-row: 5; }
+.kv-funnel-reason { grid-row: 6; }
+.kv-funnel-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 .kv-funnel-label {
   font-size: 13px;
@@ -775,29 +789,72 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   color: var(--kv-subdued);
   font-weight: 600;
 }
+/* The shape of a stage is ONE straight-edged trapezoid. --hl and --hr are the heights of its left and right edges as a
+   percentage of the band (set per stage by ProductFunnel from the stage's position, never from the data): a stage's right
+   edge is the next stage's left edge, so the funnel is one continuous band that narrows by the same step at every stage,
+   with straight top and bottom lines. The shape spans its whole cell, through the cell padding, so neighbours touch. */
 .kv-funnel-shape {
-  --h: 100%;
+  --hl: 100;
+  --hr: 100;
+  display: block;
   height: 120px;
-  margin-top: 8px;
-  display: flex;
-  align-items: center;
+  margin: 8px -12px 0;
 }
+.kv-funnel-stage:first-child .kv-funnel-shape { margin-inline-start: 0; }
+.kv-funnel-stage:last-child .kv-funnel-shape { margin-inline-end: 0; }
 .kv-funnel-shape > div {
+  position: relative;
   width: 100%;
-  height: var(--h);
+  height: 100%;
   background: var(--kv-primary);
-  opacity: 0.9;
-  clip-path: polygon(0 0, 100% 12%, 100% 88%, 0 100%);
-  border-radius: 6px;
+  clip-path: polygon(0 calc(50% - var(--hl) * 0.5%), 100% calc(50% - var(--hr) * 0.5%), 100% calc(50% + var(--hr) * 0.5%), 0 calc(50% + var(--hl) * 0.5%));
+}
+/* hover, and keyboard focus (the stage's tooltip button is its focus stop, so the stage is :focus-within): a tint laid over the shape inside its own clip, so it can never spill outside the trapezoid and
+   nothing moves or resizes */
+.kv-funnel-shape > div::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--kv-funnel-hi, rgb(255 255 255 / 0.22));
+  opacity: 0;
+  transition: opacity 160ms ease;
+  pointer-events: none;
+}
+.kv-funnel-stage:hover .kv-funnel-shape > div::after {
+  opacity: 1;
 }
 /* one grey family in both funnels: stages differ by tone (strongest to lightest), and the labels name them */
-.kv-funnel-stage.s1 .kv-funnel-shape > div { --h: 100%; background: var(--kv-tone-1); }
-.kv-funnel-stage.s2 .kv-funnel-shape > div { --h: 80%; background: var(--kv-tone-2); }
-.kv-funnel-stage.s3 .kv-funnel-shape > div { --h: 62%; background: var(--kv-tone-3); }
-.kv-funnel-stage.s4 .kv-funnel-shape > div { --h: 46%; background: var(--kv-tone-4); }
+.kv-funnel-stage.s1 .kv-funnel-shape > div { background: var(--kv-tone-1); }
+.kv-funnel-stage.s2 .kv-funnel-shape > div { background: var(--kv-tone-2); }
+.kv-funnel-stage.s3 .kv-funnel-shape > div { background: var(--kv-tone-3); --kv-funnel-hi: rgb(255 255 255 / 0.18); }
+.kv-funnel-stage.s4 .kv-funnel-shape > div { background: var(--kv-tone-4); --kv-funnel-hi: rgb(0 0 0 / 0.1); }
+.kv-funnel-stage.s5 .kv-funnel-shape > div { background: var(--kv-tone-5); --kv-funnel-hi: rgb(0 0 0 / 0.1); }
+.kv-funnel[data-stages="5"] { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.kv-funnel-scope {
+  justify-self: start;
+  align-self: start;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--kv-subdued);
+  border: 1px solid var(--kv-border);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.kv-funnel-sub {
+  font-size: 13px;
+  color: var(--kv-subdued);
+}
+.kv-funnel-foot {
+  margin: 12px 4px 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--kv-subdued);
+}
+/* a stage without a trustworthy source stays hatched; it gets the same hover feedback */
 .kv-funnel-stage.na .kv-funnel-shape > div {
   background: repeating-linear-gradient(135deg, #e5e7eb 0 6px, #f3f4f6 6px 12px);
-  opacity: 1;
+  --kv-funnel-hi: rgb(0 0 0 / 0.06);
 }
 .kv-funnel-reason {
   color: var(--kv-subdued);
@@ -805,18 +862,49 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   font-size: 12px;
   line-height: 18px;
 }
+/* long labels, large numbers and currency values wrap inside their cell instead of pushing the layout */
+.kv-funnel-label,
+.kv-funnel-count,
+.kv-funnel-sub,
+.kv-funnel-reason {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kv-funnel[data-stages="5"] .kv-funnel-count { font-size: 24px; }
+@media (prefers-reduced-motion: reduce) {
+  .kv-funnel-shape > div::after { transition: none; }
+}
 @media (max-width: 700px) {
-  .kv-funnel {
+  .kv-funnel,
+  .kv-funnel[data-stages="5"] {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
+  .kv-funnel {
+    grid-template-rows: none;
+  }
+  .kv-funnel-stage {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    grid-row: auto;
+  }
   .kv-funnel-stage + .kv-funnel-stage {
-    border-inline-start: 0;
     border-top: 1px dashed var(--kv-border);
     padding-top: 12px;
   }
-  .kv-funnel-shape {
-    height: 40px;
+  /* stacked: each stage is a plain rounded bar whose length is the same deterministic step as on desktop */
+  .kv-funnel-shape,
+  .kv-funnel-stage:first-child .kv-funnel-shape,
+  .kv-funnel-stage:last-child .kv-funnel-shape {
+    height: 14px;
+    margin: 4px 0 0;
+  }
+  .kv-funnel-shape > div {
+    width: calc(var(--hl) * 1%);
+    min-width: 24px;
+    border-radius: 7px;
+    clip-path: none;
   }
 }
 

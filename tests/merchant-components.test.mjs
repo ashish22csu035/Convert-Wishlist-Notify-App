@@ -743,55 +743,157 @@ test("a row of metric cards gets a layout that matches its count, so no card lea
 });
 
 // ======================= Wishlist / Notify Me funnel selector =======================
-const featureFunnel = async (feature, window, attribution = { state: "waiting" }) => {
+const featureFunnel = async (feature, summary, attribution = { state: "waiting" }) => {
   const { buildFeatureFunnel } = await import(pathToFileURL(path.resolve("app/utils/funnel.js")).href);
-  return buildFeatureFunnel(feature, { window, attribution });
+  return buildFeatureFunnel(feature, { summary, attribution });
+};
+const SUMMARY = {
+  range: { wishlistAddedToCart: 7, restockEmailsSent: 6, wishlistCheckouts: 4, notifyCheckouts: 2, notifyAddedToCart: 3, coverage: { expectedDays: 3, availableDays: 3, complete: true } },
+  allTime: { wishlistSaved: 120, notifySubscriptions: 45, coverage: { expectedDays: 90, availableDays: 90, complete: true } },
+  lastUpdated: null,
 };
 const READY = { state: "ready", currency: "USD", wishlist: { orders: 2, revenue: "60.00" }, notifyMe: { orders: 1, revenue: "30.00" } };
 const funnelButtons = () => [...container.querySelectorAll(".kv-seg-btn")];
 const stageLabels = () => [...container.querySelectorAll(".kv-funnel-label")].map((n) => n.textContent);
 const stageCounts = () => [...container.querySelectorAll(".kv-funnel-count")].map((n) => n.textContent);
 
-test("funnel selector: Wishlist is selected first; switching shows the Notify Me funnel with its own stages, data and note", async () => {
-  const window = { WISHLIST_ADDED: 12, WISHLIST_PRODUCT_CLICKED: 5, NOTIFY_SUBSCRIBED: 8, RESTOCK_EMAIL_SENT: 6 };
-  const funnels = { wishlist: await featureFunnel("wishlist", window, READY), notifyMe: await featureFunnel("notifyMe", window, READY) };
+test("funnel selector: Wishlist (4 stages) is selected first; switching shows the Notify Me funnel (5 stages) in the agreed order", async () => {
+  const funnels = { wishlist: await featureFunnel("wishlist", SUMMARY, READY), notifyMe: await featureFunnel("notifyMe", SUMMARY, READY) };
   await mount(h(Funnel.FunnelSwitch, { funnels, rangeLabel: "Oct 1 – Oct 3, 2026 (UTC)" }));
   assert.deepEqual(funnelButtons().map((b) => b.textContent), ["Wishlist", "Notify Me"]);
   assert.deepEqual(funnelButtons().map((b) => b.getAttribute("aria-pressed")), ["true", "false"]);
   assert.equal(container.querySelector('[role="group"]').getAttribute("aria-label"), "Funnel");
-  assert.deepEqual(stageLabels(), ["Products saved", "Opened from Wishlist", "Attributed orders", "Attributed revenue"]);
-  assert.deepEqual(stageCounts(), ["12", "5", "2", "$60.00"]);
+  assert.deepEqual(stageLabels(), ["Products saved", "Added to cart", "Checkout initiated", "Attributed revenue"]);
+  assert.deepEqual(stageCounts(), ["120", "7", "4", "$60.00"]);
+  assert.equal(container.querySelector(".kv-funnel").getAttribute("data-stages"), "4");
+  assert.deepEqual([...container.querySelectorAll(".kv-funnel-sub")].map((n) => n.textContent), ["2 orders"], "revenue and its order count together");
+  assert.deepEqual([...container.querySelectorAll(".kv-funnel-scope")].map((n) => n.textContent), ["All time"], "only the all-time stage is tagged");
   assert.equal(container.querySelectorAll(".kv-funnel-rate").length, 0, "no percentage between stages that are not a cohort");
-  assert.equal(container.querySelector(".kv-note"), null, "no explanatory text under the funnel");
-  assert.equal(/UTC days|not tracked/.test(container.textContent), false);
+  assert.equal(container.querySelector(".kv-funnel-foot"), null, "no explanatory text under a complete funnel");
+  assert.equal(/ignore the date range|about every 10 minutes/.test(container.textContent), false);
   assert.match(container.querySelector(".kv-funnel").getAttribute("aria-label"), /^Wishlist funnel, Oct 1 – Oct 3, 2026/);
 
   await click(funnelButtons()[1]);
   assert.deepEqual(funnelButtons().map((b) => b.getAttribute("aria-pressed")), ["false", "true"]);
-  assert.deepEqual(stageLabels(), ["Subscriptions", "Restock emails sent", "Attributed orders", "Attributed revenue"]);
-  assert.deepEqual(stageCounts(), ["8", "6", "1", "$30.00"]);
-  assert.equal(container.querySelector(".kv-note"), null);
-  assert.equal(/queued, failed|UTC days/.test(container.textContent), false);
-  assert.equal(container.textContent.includes("Add to cart"), false, "nothing of the Wishlist funnel remains");
+  assert.deepEqual(stageLabels(), ["Total subscriptions", "Restock emails sent", "Added to cart", "Checkout initiated", "Attributed revenue"]);
+  assert.deepEqual(stageCounts(), ["45", "6", "3", "2", "$30.00"], "the Notify Me cart-addition count is shown");
+  assert.equal(container.querySelector(".kv-funnel").getAttribute("data-stages"), "5");
+  assert.deepEqual([...container.querySelectorAll(".kv-funnel-sub")].map((n) => n.textContent), ["1 order"]);
 
   await click(funnelButtons()[0]);
-  assert.deepEqual(stageCounts(), ["12", "5", "2", "$60.00"]);
+  assert.deepEqual(stageCounts(), ["120", "7", "4", "$60.00"]);
   await unmount();
 });
 
 test("funnel selector: unavailable stages say why instead of showing zero, and a funnel without activity shows an empty state", async () => {
-  const window = { WISHLIST_ADDED: 3, WISHLIST_PRODUCT_CLICKED: 0 };
-  const funnels = { wishlist: await featureFunnel("wishlist", window, { state: "needs_access" }), notifyMe: await featureFunnel("notifyMe", { NOTIFY_SUBSCRIBED: 0, RESTOCK_EMAIL_SENT: 0 }, { state: "waiting" }) };
+  const wishlistSummary = { range: { ...SUMMARY.range, wishlistCheckouts: 0 }, allTime: SUMMARY.allTime };
+  const emptySummary = { range: { restockEmailsSent: 0, notifyCheckouts: 0, wishlistAddedToCart: 0, wishlistCheckouts: 0 }, allTime: { wishlistSaved: 0, notifySubscriptions: 0 } };
+  const funnels = { wishlist: await featureFunnel("wishlist", wishlistSummary, { state: "needs_access" }), notifyMe: await featureFunnel("notifyMe", emptySummary, { state: "waiting" }) };
   await mount(h(Funnel.FunnelSwitch, { funnels, rangeLabel: "Last 30 days" }));
-  assert.deepEqual(stageCounts(), ["3", "0", "Unavailable", "Unavailable"], "a real zero stays zero; missing order data is unavailable");
+  assert.deepEqual(stageCounts(), ["120", "7", "0", "Unavailable"], "a real zero stays zero; missing order data is unavailable");
   const reasons = [...container.querySelectorAll(".kv-funnel-reason")].map((n) => n.textContent);
   assert.ok(reasons.some((r) => /read_orders/.test(r)), "the reason is on the stage");
-  assert.equal(container.textContent.includes("Not available yet"), false);
 
   await click(funnelButtons()[1]);
   assert.equal(container.querySelector(".kv-funnel"), null, "no row of zeros");
   assert.match(container.querySelector(".kv-empty").textContent, /No Notify Me activity in this period/);
   assert.equal(funnelButtons()[1].getAttribute("aria-pressed"), "true");
+  await unmount();
+});
+
+test("Notify Me Added to cart: a real zero is shown as 0, an uncalculated day as Unavailable with its reason", async () => {
+  const zero = { ...SUMMARY, range: { ...SUMMARY.range, notifyAddedToCart: 0 } };
+  await mount(h(Funnel.ProductFunnel, { stages: (await featureFunnel("notifyMe", zero, READY)).stages }));
+  assert.equal(stageCounts()[2], "0");
+  assert.equal(container.querySelectorAll(".kv-funnel-stage")[2].classList.contains("na"), false);
+  await unmount();
+  const missing = { ...SUMMARY, range: { ...SUMMARY.range, notifyAddedToCart: null } };
+  await mount(h(Funnel.ProductFunnel, { stages: (await featureFunnel("notifyMe", missing, READY)).stages }));
+  assert.equal(stageCounts()[2], "Unavailable");
+  const third = container.querySelectorAll(".kv-funnel-stage")[2];
+  assert.equal(third.classList.contains("na"), true);
+  assert.match(third.textContent, /Not calculated yet/);
+  await unmount();
+});
+
+test("the Product Funnel shows no information icons in either tab, and keeps its labels, values and order counts", async () => {
+  const funnels = { wishlist: await featureFunnel("wishlist", SUMMARY, READY), notifyMe: await featureFunnel("notifyMe", SUMMARY, READY) };
+  await mount(h(Funnel.FunnelSwitch, { funnels, rangeLabel: "Last 30 days" }));
+  const icons = () => container.querySelectorAll(".kv-funnel .kv-hint, .kv-funnel s-icon, .kv-funnel s-tooltip, .kv-funnel button");
+  assert.equal(icons().length, 0, "Wishlist tab");
+  assert.deepEqual(stageLabels(), ["Products saved", "Added to cart", "Checkout initiated", "Attributed revenue"]);
+  assert.deepEqual(stageCounts(), ["120", "7", "4", "$60.00"]);
+  assert.deepEqual([...container.querySelectorAll(".kv-funnel-sub")].map((n) => n.textContent), ["2 orders"]);
+  await click(funnelButtons()[1]);
+  assert.equal(icons().length, 0, "Notify Me tab");
+  assert.deepEqual(stageLabels(), ["Total subscriptions", "Restock emails sent", "Added to cart", "Checkout initiated", "Attributed revenue"]);
+  assert.deepEqual(stageCounts(), ["45", "6", "3", "2", "$30.00"]);
+  assert.deepEqual([...container.querySelectorAll(".kv-funnel-sub")].map((n) => n.textContent), ["1 order"]);
+  await unmount();
+  const source = fs.readFileSync("app/components/product-funnel.jsx", "utf8");
+  assert.equal(/Hint|merchant-ui/.test(source), false, "the funnel no longer imports the info-icon component");
+  assert.ok(fs.readFileSync("app/components/merchant-ui.jsx", "utf8").includes("export function Hint"), "the info icon elsewhere in the app is untouched");
+});
+
+// ======================= funnel geometry, hover and focus =======================
+test("funnel geometry: one continuous band, equal steps, the first stage largest, each stage's right edge is the next one's left edge", async () => {
+  for (const feature of ["wishlist", "notifyMe"]) {
+    const funnels = { wishlist: await featureFunnel("wishlist", SUMMARY, READY), notifyMe: await featureFunnel("notifyMe", SUMMARY, READY) };
+    await mount(h(Funnel.FunnelSwitch, { funnels, rangeLabel: "Last 30 days", initial: feature }));
+    const shapes = [...container.querySelectorAll(".kv-funnel-shape")];
+    const edges = shapes.map((el) => [Number(el.style.getPropertyValue("--hl")), Number(el.style.getPropertyValue("--hr"))]);
+    assert.equal(edges.length, feature === "wishlist" ? 4 : 5);
+    assert.equal(edges[0][0], 100, "the first stage starts at full height");
+    for (let i = 0; i < edges.length; i += 1) {
+      assert.ok(edges[i][1] < edges[i][0], `stage ${i + 1} narrows to the right`);
+      if (i) assert.equal(edges[i][0], edges[i - 1][1], `stage ${i + 1} starts exactly where stage ${i} ends: no step, gap or slope`);
+    }
+    const steps = edges.map(([l, r]) => Math.round((l - r) * 10) / 10);
+    assert.ok(Math.max(...steps) - Math.min(...steps) <= 0.2, "every stage narrows by the same step");
+    assert.equal(edges[edges.length - 1][1], 40);
+    await unmount();
+  }
+  assert.deepEqual(Funnel.funnelEdges(4), [100, 85, 70, 55, 40]);
+  // the shape depends on position only: the same edges whatever the numbers are
+  const zeros = { range: { wishlistAddedToCart: 0, restockEmailsSent: 0, wishlistCheckouts: 0, notifyCheckouts: 0 }, allTime: { wishlistSaved: 9, notifySubscriptions: 0 } };
+  await mount(h(Funnel.ProductFunnel, { stages: (await featureFunnel("wishlist", zeros, READY)).stages }));
+  assert.deepEqual([...container.querySelectorAll(".kv-funnel-shape")].map((el) => el.style.getPropertyValue("--hl")), ["100", "85", "70", "55"]);
+  await unmount();
+});
+
+test("funnel CSS: straight clip-path from the two edge heights, shapes touch, stacked bars on phones, long values wrap", () => {
+  const css = fs.readFileSync("app/styles/merchant.css", "utf8").replace(/\r\n/g, "\n");
+  const shape = /\.kv-funnel-shape > div \{[^}]*\}/.exec(css)[0];
+  assert.match(shape, /clip-path: polygon\(0 calc\(50% - var\(--hl\) \* 0\.5%\), 100% calc\(50% - var\(--hr\) \* 0\.5%\), 100% calc\(50% \+ var\(--hr\) \* 0\.5%\), 0 calc\(50% \+ var\(--hl\) \* 0\.5%\)\)/);
+  assert.equal(/--h:\s*\d+%/.test(css), false, "the old per-stage heights, which never met the next stage, are gone");
+  assert.match(css, /\.kv-funnel-shape \{[^}]*margin: 8px -12px 0;[^}]*\}/, "the shape spans its cell, so neighbours touch");
+  assert.match(css, /\.kv-funnel \{[^}]*grid-template-rows: repeat\(6, auto\);/, "one set of rows for the whole funnel...");
+  assert.match(css, /\.kv-funnel-stage \{[^}]*grid-row: 1 \/ span 6;[^}]*grid-template-rows: subgrid;/, "...shared by every stage, so all shapes sit on the same line and every joint meets");
+  const phone = css.slice(css.indexOf("@media (max-width: 700px) {\n  .kv-funnel,"));
+  assert.match(phone, /clip-path: none/);
+  assert.match(phone, /width: calc\(var\(--hl\) \* 1%\)/, "a stacked stage is a bar, never a distorted trapezoid");
+  assert.match(css, /\.kv-funnel-sub,\n\.kv-funnel-reason \{\n  min-width: 0;\n  overflow-wrap: anywhere;/, "long values wrap inside their cell");
+});
+
+test("funnel hover: a tint inside the clipped shape, 160 ms, nothing moves, reduced motion respected, unavailable stages included", async () => {
+  const css = fs.readFileSync("app/styles/merchant.css", "utf8").replace(/\r\n/g, "\n");
+  const tint = /\.kv-funnel-shape > div::after \{[^}]*\}/.exec(css)[0];
+  assert.match(tint, /position: absolute;\s*inset: 0;/, "the tint fills the shape, which is clipped, so it can never spill");
+  assert.match(tint, /opacity: 0;/);
+  assert.match(tint, /transition: opacity 160ms ease;/);
+  assert.match(tint, /pointer-events: none;/);
+  assert.match(css, /\.kv-funnel-stage:hover \.kv-funnel-shape > div::after \{\n  opacity: 1;/, "hovering a stage shows the tint");
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\n  \.kv-funnel-shape > div::after \{ transition: none; \}/);
+  const at = css.indexOf(".kv-funnel-stage:hover");
+  assert.equal(/transform|scale|box-shadow|width|height|margin|padding/.test(css.slice(at, css.indexOf("}", at))), false, "hover changes nothing that could move or resize a neighbour");
+  assert.match(css, /\.kv-funnel-stage\.na \.kv-funnel-shape > div \{[^}]*--kv-funnel-hi/, "an unavailable stage keeps its hatching and still reacts");
+  // no info icons: a stage is plain text and a shape, with nothing to focus, navigate or submit
+  const funnels = { wishlist: await featureFunnel("wishlist", SUMMARY, READY), notifyMe: await featureFunnel("notifyMe", SUMMARY, READY) };
+  await mount(h(Funnel.FunnelSwitch, { funnels, rangeLabel: "Last 30 days", initial: "notifyMe" }));
+  for (const item of container.querySelectorAll(".kv-funnel-stage")) {
+    assert.equal(item.querySelector("button, a, form, s-icon, s-tooltip, .kv-hint"), null, "no info icon, tooltip trigger or other control in a stage");
+  }
+  assert.deepEqual(stageCounts(), ["45", "6", "3", "2", "$30.00"], "values are untouched by the visual changes");
   await unmount();
 });
 

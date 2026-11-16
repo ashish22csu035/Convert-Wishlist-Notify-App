@@ -362,6 +362,68 @@ export async function getAnalyticsOverview(shop, input = DEFAULT_DAYS, now = new
   };
 }
 
+// The Product Funnel, read ONLY from the stored daily summaries (AnalyticsDaily); no raw table is touched. One aggregate
+// query per scope, whatever the history. Only days whose Product Funnel columns are filled count (NULL = the worker has not
+// calculated that day yet, and is never read as zero), so a figure is a lower bound until coverage.complete is true, and
+// null (unavailable) when no day is usable.
+//   range    the selected dates: Wishlist added to cart, Notify Me restock emails sent, checkouts per feature.
+//   allTime  from the shop's first day to today, whatever the selected dates: Wishlist save events (WISHLIST_ADDED, a
+//            count of saves, not of products saved now) and Notify Me subscriptions ever created (rows keep existing
+//            after they are fulfilled or unsubscribed).
+//   lastUpdated  when the newest of those summary days was calculated (the data can be up to one worker run behind).
+// `to` is exclusive; null means "through today".
+export async function getFunnelSummary(shop, period, now = new Date()) {
+  const today = startOfUtcDay(now).getTime() + DAY_MS;
+  const first = startOfUtcDay(shop.installedAt).getTime();
+  const scope = async (from, to) => {
+    const end = Math.min(to ? to.getTime() : Infinity, today);
+    const start = Math.max(from.getTime(), first);
+    const expectedDays = Math.max(0, Math.round((end - start) / DAY_MS));
+    if (!expectedDays) return { expectedDays, availableDays: 0, complete: true, none: true, sums: {}, updated: null };
+    const agg = await prisma.analyticsDaily.aggregate({
+      where: { shopId: shop.id, day: { gte: new Date(start), lt: new Date(end) }, wishlistAddedToCart: { not: null } },
+      _count: { _all: true },
+      _max: { updatedAt: true },
+      _sum: { wishlistAdded: true, restockEmailSent: true, wishlistAddedToCart: true, notifySubscriptionsCreated: true, wishlistCheckouts: true, notifyCheckouts: true },
+    });
+    const availableDays = agg._count._all;
+    return { expectedDays, availableDays, complete: availableDays === expectedDays, none: false, sums: agg._sum, updated: agg._max.updatedAt };
+  };
+  // Notify Me cart additions have their own coverage: a day written before that column existed is "not calculated yet" for this
+  // stage only, and must neither hide the other stages nor be read as zero.
+  const notifyCart = async (from, to) => {
+    const end = Math.min(to ? to.getTime() : Infinity, today);
+    const start = Math.max(from.getTime(), first);
+    const expectedDays = Math.max(0, Math.round((end - start) / DAY_MS));
+    if (!expectedDays) return { value: 0, complete: true };
+    const agg = await prisma.analyticsDaily.aggregate({
+      where: { shopId: shop.id, day: { gte: new Date(start), lt: new Date(end) }, notifyAddedToCart: { not: null } },
+      _count: { _all: true },
+      _sum: { notifyAddedToCart: true },
+    });
+    return { value: agg._count._all === 0 ? null : agg._sum.notifyAddedToCart ?? 0, complete: agg._count._all === expectedDays };
+  };
+  const [range, all, cart] = await Promise.all([scope(period.since, period.until), scope(new Date(0), null), notifyCart(period.since, period.until)]);
+  const value = (part, key) => (part.none ? 0 : part.availableDays === 0 ? null : part.sums[key] ?? 0);
+  const updated = [range.updated, all.updated].filter(Boolean).sort((a, b) => b - a)[0] ?? null;
+  return {
+    range: {
+      wishlistAddedToCart: value(range, "wishlistAddedToCart"),
+      restockEmailsSent: value(range, "restockEmailSent"),
+      wishlistCheckouts: value(range, "wishlistCheckouts"),
+      notifyCheckouts: value(range, "notifyCheckouts"),
+      notifyAddedToCart: cart.value,
+      coverage: { expectedDays: range.expectedDays, availableDays: range.availableDays, complete: range.complete && cart.complete },
+    },
+    allTime: {
+      wishlistSaved: value(all, "wishlistAdded"),
+      notifySubscriptions: value(all, "notifySubscriptionsCreated"),
+      coverage: { expectedDays: all.expectedDays, availableDays: all.availableDays, complete: all.complete },
+    },
+    lastUpdated: updated ? updated.toISOString() : null,
+  };
+}
+
 export async function getWishlistOverview(shopId, input = DEFAULT_DAYS, now = new Date()) {
   const period = resolvePeriod(input, now);
   const { days } = period;

@@ -12,7 +12,7 @@ import { invalidateAnalytics } from "../models/analytics-cache.server";
 //     email retried after hours, a webhook redelivered within Shopify's 48 h, inventory events replayed by recovery).
 //     Older days are final.
 //   - Backfill / repair, newest first, at most BACKFILL_DAYS_PER_SHOP per shop and run: days since the shop was installed
-//     that have no row; rows written before the notifyUnsubscribed column existed (it is NULL); rows that were
+//     that have no row; rows written before the notifyUnsubscribed or the Product Funnel columns existed (NULL); rows that were
 //     calculated before their day ended (the worker was down at midnight). Missing days are looked for in chunks of
 //     CHUNK_DAYS, so memory does not grow with history.
 //   - Failures: a day that fails is logged (error code only) and stays missing / stale, so the next run tries it again.
@@ -28,6 +28,25 @@ const SHOP_PAGE = 50;
 const DEFAULT_BUDGET_MS = 3 * 60 * 1000; // no new day is started after this, so the run ends well inside the cron limit
 
 const dayKey = (date) => date.toISOString().slice(0, 10);
+
+// What a failure looked like, safe to print. The log line has always carried only the error's code or name, which for a Prisma
+// failure is just "PrismaClientUnknownRequestError": true, but it hides the cause. `verbose` (development, or ANALYTICS_DEBUG=1)
+// adds the cause's message (the last lines of it, which is where Prisma puts it, not the query) and the stack. Anything that
+// looks like an email address or a long token (a secret, an id) is replaced, and the length is capped, so a log never carries
+// customer data or credentials. Production keeps the code only.
+export const analyticsVerbose = () => process.env.NODE_ENV !== "production" || process.env.ANALYTICS_DEBUG === "1";
+const scrub = (text) =>
+  String(text ?? "")
+    .replace(/[^\s@"'<>()]+@[^\s@"'<>()]+/g, "[email]")
+    .replace(/[A-Za-z0-9_\-+/=]{32,}/g, "[token]");
+export function describeFailure(error, verbose = analyticsVerbose()) {
+  const out = { reason: String(error?.code ?? error?.name ?? "error").slice(0, 64) };
+  if (!verbose) return out;
+  const lines = String(error?.message ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+  out.message = scrub(lines.slice(-3).join(" / ")).slice(0, 400);
+  if (error?.stack) out.stack = scrub(String(error.stack).split("\n").slice(0, 8).join(" | ")).slice(0, 1200);
+  return out;
+}
 
 // Stores one calculated day. `computedAt` is when the calculation STARTED, and it is saved as the row's updatedAt, so a
 // row says "this reflects the data as of <updatedAt>". A write only replaces a row that is older than that:
@@ -48,6 +67,7 @@ export async function writeAnalyticsDay(shopId, result, computedAt) {
     notifyMeSessions: result.notifyMeSessions,
     wishlistSessionsCarried: result.wishlistSessionsCarried,
     notifyMeSessionsCarried: result.notifyMeSessionsCarried,
+    ...(result.funnel ?? {}), // the Product Funnel counts: wishlistAddedToCart, notifySubscriptionsCreated, wishlistCheckouts, notifyCheckouts
     updatedAt: computedAt,
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -71,19 +91,19 @@ async function daysToCalculate(shop, now, backfillLimit) {
 
   // Today and the recent days (day numbers counted back from today: 0 = today).
   const recentFrom = Math.max(first, today - (REFRESH_DAYS - 1) * DAY_MS);
-  const recent = await prisma.analyticsDaily.findMany({ where: { shopId: shop.id, day: { gte: new Date(recentFrom), lte: new Date(today) } }, select: { day: true, updatedAt: true, notifyUnsubscribed: true } });
+  const recent = await prisma.analyticsDaily.findMany({ where: { shopId: shop.id, day: { gte: new Date(recentFrom), lte: new Date(today) } }, select: { day: true, updatedAt: true, notifyUnsubscribed: true, wishlistAddedToCart: true, notifyAddedToCart: true } });
   const saved = new Map(recent.map((row) => [dayKey(row.day), row]));
   for (let t = today; t >= recentFrom; t -= DAY_MS) {
     const row = saved.get(dayKey(new Date(t)));
     const always = t >= today - (ALWAYS_REFRESH_DAYS - 1) * DAY_MS;
-    if (always || !row || row.notifyUnsubscribed === null || row.updatedAt.getTime() < now.getTime() - REFRESH_AFTER_MS) todo.push(dayKey(new Date(t)));
+    if (always || !row || row.notifyUnsubscribed === null || row.wishlistAddedToCart === null || row.notifyAddedToCart === null || row.updatedAt.getTime() < now.getTime() - REFRESH_AFTER_MS) todo.push(dayKey(new Date(t)));
   }
 
   // Older days: missing, written before the notifyUnsubscribed column, or calculated before their day ended.
   const olderLast = recentFrom - DAY_MS;
   if (olderLast < first) return todo;
   const older = new Set();
-  const repair = await prisma.$queryRaw`SELECT day FROM AnalyticsDaily WHERE shopId = ${shop.id} AND day <= ${new Date(olderLast)} AND (notifyUnsubscribed IS NULL OR updatedAt < DATE_ADD(day, INTERVAL 1 DAY)) ORDER BY day DESC LIMIT ${backfillLimit}`;
+  const repair = await prisma.$queryRaw`SELECT day FROM AnalyticsDaily WHERE shopId = ${shop.id} AND day <= ${new Date(olderLast)} AND (notifyUnsubscribed IS NULL OR wishlistAddedToCart IS NULL OR notifyAddedToCart IS NULL OR updatedAt < DATE_ADD(day, INTERVAL 1 DAY)) ORDER BY day DESC LIMIT ${backfillLimit}`;
   for (const row of repair) older.add(dayKey(new Date(row.day)));
   const expected = (olderLast - first) / DAY_MS + 1;
   const have = await prisma.analyticsDaily.count({ where: { shopId: shop.id, day: { gte: new Date(first), lte: new Date(olderLast) } } });
@@ -138,12 +158,12 @@ export async function runAnalyticsDaily({ now = () => new Date(), calculate = ca
             if (outcome === "written") wrote += 1;
           } catch (error) {
             summary.failed += 1;
-            log.error(`[analytics] day failed ${JSON.stringify({ shop: shop.domain, day, reason: String(error?.code ?? error?.name ?? "error").slice(0, 64) })}`);
+            log.error(`[analytics] day failed ${JSON.stringify({ shop: shop.domain, day, ...describeFailure(error) })}`);
           }
         }
       } catch (error) {
         summary.failed += 1;
-        log.error(`[analytics] shop failed ${JSON.stringify({ shop: shop.domain, reason: String(error?.code ?? error?.name ?? "error").slice(0, 64) })}`);
+        log.error(`[analytics] shop failed ${JSON.stringify({ shop: shop.domain, ...describeFailure(error) })}`);
       }
       // The Analytics page caches its report per shop (analytics-cache.server.js): tell it the summaries changed. This
       // comes after the writes, so a page that misses afterwards reads the new rows. A failure here is not a failure of

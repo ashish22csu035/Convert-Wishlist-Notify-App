@@ -10,7 +10,9 @@ const clean = (value, max) =>
 
 // https product link for the exact variant, from Shopify's own storefront URL when it has one,
 // otherwise from the shop's domain and the product handle.
-export function productLink({ onlineStoreUrl, handle, shopDomain, variantGid }) {
+// `notifyToken` (optional) is the opaque cart-tracking token: it rides on the link as ?kw_n= so the storefront can tie a later
+// cart addition to this email. It is random, carries no customer data and is not the unsubscribe token.
+export function productLink({ onlineStoreUrl, handle, shopDomain, variantGid, notifyToken }) {
   const variantId = String(variantGid ?? "").split("/").pop();
   if (!/^[0-9]{1,20}$/.test(variantId)) return null;
   let url;
@@ -25,13 +27,14 @@ export function productLink({ onlineStoreUrl, handle, shopDomain, variantGid }) 
   url.search = "";
   url.hash = "";
   url.searchParams.set("variant", variantId);
+  if (typeof notifyToken === "string" && /^[A-Za-z0-9_-]{20,64}$/.test(notifyToken)) url.searchParams.set("kw_n", notifyToken);
   return url.toString();
 }
 
-export function buildRestockEmail({ shop, settings, product, variantGid, recipient, mailFrom, unsubscribeLink, messageId }) {
+export function buildRestockEmail({ shop, settings, product, variantGid, recipient, mailFrom, unsubscribeLink, messageId, cartToken }) {
   const to = addressOf(recipient);
   const title = clean(product?.productTitle, 200);
-  const link = productLink({ onlineStoreUrl: product?.onlineStoreUrl, handle: product?.handle, shopDomain: shop?.domain, variantGid });
+  const link = productLink({ onlineStoreUrl: product?.onlineStoreUrl, handle: product?.handle, shopDomain: shop?.domain, variantGid, notifyToken: cartToken });
   if (!to || !title || !link) return null;
 
   const variant = clean(product.variantTitle, 100);

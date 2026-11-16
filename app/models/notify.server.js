@@ -1,6 +1,8 @@
 import prisma from "../db.server";
 import { numericId } from "../utils/shopify-ids.server";
-import { logEvent, mutate } from "./wishlist.server";
+import { hashToken } from "./unsubscribe.server";
+import { ATTRIBUTION_WINDOW_DAYS } from "./order-attribution.server";
+import { WishlistError, logEvent, mutate } from "./wishlist.server";
 import { traceProxy } from "../utils/storefront-auth.server";
 import { notOlderThan } from "./restock.server";
 import {
@@ -183,4 +185,42 @@ async function subscribe(identity, variantGid, deps, progress) {
     await logEvent(tx, context, "NOTIFY_SUBSCRIBED", variant.productGid, variantGid);
     return { subscribed: true, changed: true };
   });
+}
+
+// The storefront reports that the EMAILED variant is now in the cart, after the customer came from a restock email.
+//
+// The email's product link carries an opaque token (?kw_n=, saved only as a hash on the EmailDelivery). Nothing the browser
+// sends is trusted beyond that token: the shop and the customer come from the signed proxy identity, and the delivery,
+// the variant and the product come from the database. A cart addition is recorded (one NOTIFY_ADDED_TO_CART event) only when
+//   - the token belongs to a restock email of THIS shop that the mail server accepted (status SENT);
+//   - that email was sent to THIS signed-in customer (a forwarded link cannot credit someone else's email);
+//   - the variant in the cart is exactly the variant the email was about (an unrelated product is never counted);
+//   - the email is at most ATTRIBUTION_WINDOW_DAYS old (the same 7 days as every other touch).
+// UNIQUE(emailDeliveryId) makes a repeated report (a retry, a second tab) change nothing: { recorded: false, duplicate: true }.
+// It writes no session and creates no Shop or Actor, and a refusal writes nothing. The browser only calls this after Shopify's own
+// cart shows the line, so a failed cart addition is never sent (and is never trusted if it were: see the storefront script).
+const CART_WINDOW_MS = ATTRIBUTION_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+export async function recordNotifyCartAdd({ shopDomain, customerGid }, { token, variantGid }, now = () => new Date()) {
+  const refuse = () => new WishlistError("attribution_invalid", 422);
+  if (typeof token !== "string" || !/^[A-Za-z0-9_-]{20,64}$/.test(token) || !variantGid) throw refuse();
+  const shop = await prisma.shop.findUnique({ where: { domain: shopDomain } });
+  if (!shop || shop.status !== "ACTIVE") throw refuse();
+  const actor = await prisma.actor.findUnique({ where: { shopId_customerGid: { shopId: shop.id, customerGid } }, select: { id: true } });
+  if (!actor) throw refuse();
+  const delivery = await prisma.emailDelivery.findUnique({
+    where: { cartTokenHash: hashToken(token) },
+    select: { id: true, shopId: true, status: true, variantGid: true, sentAt: true, subscription: { select: { actorId: true, productGid: true } } },
+  });
+  if (!delivery || delivery.shopId !== shop.id || delivery.status !== "SENT" || delivery.subscription.actorId !== actor.id) throw refuse();
+  if (delivery.variantGid !== variantGid) throw refuse();
+  if (!delivery.sentAt || now().getTime() - delivery.sentAt.getTime() > CART_WINDOW_MS) throw refuse();
+  try {
+    await prisma.activityEvent.create({
+      data: { shopId: shop.id, actorId: actor.id, type: "NOTIFY_ADDED_TO_CART", feature: "NOTIFY_ME", productGid: delivery.subscription.productGid, variantGid: delivery.variantGid, emailDeliveryId: delivery.id },
+    });
+  } catch (error) {
+    if (error?.code === "P2002") return { recorded: false, duplicate: true };
+    throw error;
+  }
+  return { recorded: true, duplicate: false };
 }

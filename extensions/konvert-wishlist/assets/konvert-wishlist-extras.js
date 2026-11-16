@@ -2427,6 +2427,168 @@
     });
   }
 
+  /* ---------- Notify Me: the emailed variant is added to the cart ---------- */
+  // A restock email links to the product page with ?variant=<id>&kw_n=<opaque token>. The token is random, is saved only as a
+  // hash on the server, and is not the unsubscribe token. This script:
+  //   1. on landing, remembers the token and how many of that variant the cart already holds (the baseline), and removes the
+  //      token from the address bar;
+  //   2. after a cart write (and when a page loads, which covers a plain form post that reloads the page), asks Shopify's own
+  //      cart (cart.js) whether that variant's quantity went ABOVE the baseline. Only then it tells the server, so a failed cart
+  //      addition and an unrelated product are never reported;
+  //   3. the server checks the token, the signed-in customer and the variant again and records at most one event per email.
+  // The token travels in the browser's session storage (local storage as a fallback) for at most 7 days, only to be sent back to the
+  // server, which is where the attribution is decided.
+  var NOTIFY_CTX_KEY = 'kw_notify_ctx';
+  var NOTIFY_TOKEN = /^[A-Za-z0-9_-]{20,64}$/;
+  var NOTIFY_CTX_TTL = 7 * 24 * 60 * 60 * 1000;
+  var notifyCartBusy = false;
+  var notifyCartWatched = false;
+
+  function readNotifyCtx() {
+    try {
+      var raw = window.sessionStorage.getItem(NOTIFY_CTX_KEY) || window.localStorage.getItem(NOTIFY_CTX_KEY);
+      var ctx = raw ? JSON.parse(raw) : null;
+      return ctx && NOTIFY_TOKEN.test(String(ctx.t)) && /^[0-9]{1,20}$/.test(String(ctx.v)) && typeof ctx.b === 'number' ? ctx : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeNotifyCtx(ctx) {
+    var json = ctx ? JSON.stringify(ctx) : null;
+    ['sessionStorage', 'localStorage'].forEach(function (name) {
+      try {
+        if (json) window[name].setItem(NOTIFY_CTX_KEY, json);
+        else window[name].removeItem(NOTIFY_CTX_KEY);
+      } catch (error) {
+        /* storage unavailable: the other one, or nothing, is used */
+      }
+    });
+  }
+
+  function readShopCart() {
+    return fetch(kw.shopRoot() + 'cart.js', { headers: { Accept: 'application/json' }, credentials: 'same-origin' }).then(function (response) {
+      if (!response.ok) throw new Error('cart_unreadable');
+      return response.json();
+    });
+  }
+
+  function cartQuantityOf(cart, variantId) {
+    var total = 0;
+    ((cart && cart.items) || []).forEach(function (line) {
+      if (String(line.variant_id) === String(variantId)) total += Number(line.quantity) || 0;
+    });
+    return total;
+  }
+
+  function captureNotifyLanding() {
+    var params;
+    try {
+      params = new window.URLSearchParams(window.location.search);
+    } catch (error) {
+      return Promise.resolve();
+    }
+    var token = params.get('kw_n');
+    if (!token) return Promise.resolve();
+    var variant = params.get('variant');
+    try {
+      params.delete('kw_n'); // the token is not left in the address bar, the history or a copied link
+      var query = params.toString();
+      window.history.replaceState(window.history.state, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+    } catch (error) {
+      /* the address bar keeps it: harmless, the token only credits one email */
+    }
+    if (!NOTIFY_TOKEN.test(token) || !/^[0-9]{1,20}$/.test(variant || '')) return Promise.resolve();
+    var known = readNotifyCtx();
+    if (known && known.t === token) return Promise.resolve(); // a reload of the landing page keeps its first baseline
+    return readShopCart().then(
+      function (cart) {
+        writeNotifyCtx({ t: token, v: variant, b: cartQuantityOf(cart, variant), at: Date.now(), done: false });
+      },
+      function () {
+        /* without a baseline an earlier cart line could be mistaken for the addition: nothing is tracked */
+      }
+    );
+  }
+
+  function checkNotifyCart() {
+    var ctx = readNotifyCtx();
+    if (!ctx || ctx.done || notifyCartBusy || !config.loggedIn) return Promise.resolve();
+    if (Date.now() - Number(ctx.at) > NOTIFY_CTX_TTL) {
+      writeNotifyCtx(null);
+      return Promise.resolve();
+    }
+    notifyCartBusy = true;
+    return readShopCart()
+      .then(function (cart) {
+        if (cartQuantityOf(cart, ctx.v) <= ctx.b) return null; // nothing was added (or the addition failed)
+        return kw
+          .request({ method: 'POST', path: config.notifyPath, keepalive: true, body: { op: 'cart_add', token: ctx.t, variantId: ctx.v } })
+          .then(
+            function () {
+              ctx.done = true; // recorded, or already recorded for this email: either way, nothing more to send
+              writeNotifyCtx(ctx);
+            },
+            function (error) {
+              var status = error && error.status;
+              // 401: not signed in yet, keep it for later. 429 and server errors: try again at the next cart write or page.
+              // Any other refusal is final (invalid or foreign token, another variant, too old, Notify Me switched off).
+              if (status >= 400 && status < 500 && status !== 401 && status !== 429) writeNotifyCtx(null);
+              else warn('notify cart activity failed', error);
+            }
+          );
+      })
+      .catch(noop)
+      .then(function () {
+        notifyCartBusy = false;
+      });
+  }
+
+  function watchCartWrites() {
+    if (notifyCartWatched) return;
+    notifyCartWatched = true;
+    var timer = null;
+    function soon() {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(checkNotifyCart, 400);
+    }
+    function isCartWrite(url) {
+      return /\/cart\/(add|change|update)(\.js)?(\?|$)/.test(String(url || ''));
+    }
+    if (window.fetch) {
+      var originalFetch = window.fetch;
+      window.fetch = function (input) {
+        var result = originalFetch.apply(this, arguments);
+        try {
+          if (isCartWrite(typeof input === 'string' ? input : input && input.url)) result.then(soon, noop);
+        } catch (error) {
+          /* never interferes with the theme's own request */
+        }
+        return result;
+      };
+    }
+    if (window.XMLHttpRequest) {
+      var originalOpen = window.XMLHttpRequest.prototype.open;
+      window.XMLHttpRequest.prototype.open = function (method, url) {
+        if (isCartWrite(url)) this.addEventListener('loadend', soon);
+        return originalOpen.apply(this, arguments);
+      };
+    }
+    window.addEventListener('pageshow', soon);
+  }
+
+  function trackNotifyCart() {
+    if (config.notifyEnabled === false) return;
+    captureNotifyLanding()
+      .then(function () {
+        var ctx = readNotifyCtx();
+        if (!ctx || ctx.done) return;
+        watchCartWrites();
+        return checkNotifyCart();
+      })
+      .catch(noop);
+  }
+
   /* ---------- start ---------- */
 
   if (config.loggedIn) {
@@ -2441,6 +2603,7 @@
   kw.render();
   hydratePage();
   startNotify();
+  trackNotifyCart();
 
   if (window.MutationObserver && config.collectionCards) {
     var pending = null;

@@ -72,6 +72,7 @@ test("a day without activity is zeros for events and sessions", async () => {
     notifyMeSessions: 0,
     wishlistSessionsCarried: 0,
     notifyMeSessionsCarried: 0,
+    funnel: { wishlistAddedToCart: 0, notifySubscriptionsCreated: 0, wishlistCheckouts: 0, notifyCheckouts: 0, notifyAddedToCart: 0 },
   });
 });
 

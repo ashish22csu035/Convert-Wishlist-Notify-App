@@ -954,3 +954,32 @@ test("a failed throttled lookup is not cached either: the next drain asks Shopif
   assert.deepEqual((await worker.drain()).outcomes, { SENT: 1 });
   assert.equal(n, 2);
 });
+
+// ======================= the cart-tracking token in the email =======================
+test("a sent restock email carries an opaque tracking token in its product link; only its hash is stored, and it is not the unsubscribe token", async () => {
+  const shop = await makeShop("carttoken");
+  const { job: row, variantGid } = await makeJob(shop);
+  const transport = fakeTransport();
+  const { job, result } = await claimAndRun(shop, ctxWith(transport));
+  assert.equal(result, "SENT");
+  const mail = transport.calls[0];
+  const link = /https:\/\/shop\.example\.invalid\/products\/test-board\?[^\s"'<>)]+/.exec(mail.text)[0];
+  const params = new URL(link.replace(/&amp;/g, "&")).searchParams;
+  const cartToken = params.get("kw_n");
+  assert.ok(cartToken && cartToken.length >= 40, "an opaque token is on the product link");
+  assert.equal(params.get("variant"), variantGid.split("/").pop());
+  const stored = await jobRow(row.id);
+  assert.equal(stored.cartTokenHash, m.hashToken(cartToken), "the database holds the hash, so the token itself is not recoverable from it");
+  assert.notEqual(stored.cartTokenHash, stored.linkTokenHash, "a different secret from the unsubscribe token");
+  assert.notEqual(cartToken, tokenFrom(mail), "the product link never carries the unsubscribe token");
+  assert.equal(mail.text.includes("customer@example.invalid") && link.includes("customer@example.invalid"), false, "no email address in the URL");
+  assert.equal(link.includes(job.subscriptionId) || link.includes(row.id), false, "no subscription or delivery id in the URL");
+});
+
+test("a send that is retried keeps no tracking token (and a token left on a never-delivered email is useless: only SENT emails are accepted)", async () => {
+  const shop = await makeShop("carttoken-retry");
+  const { job: row } = await makeJob(shop);
+  const { result } = await claimAndRun(shop, ctxWith(fakeTransport({ fail: { responseCode: 421, command: "DATA" } })));
+  assert.equal(result, "PENDING");
+  assert.equal((await jobRow(row.id)).cartTokenHash, null);
+});

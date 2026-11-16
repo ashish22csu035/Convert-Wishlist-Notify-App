@@ -8,7 +8,7 @@ import {
 import { toGid } from "../utils/shopify-ids.server";
 import { WishlistError, recordNotifyMeOpen } from "../models/wishlist.server";
 import { LookupError } from "../models/shopify-lookup.server";
-import { listActiveSubscriptions, subscribeToNotify } from "../models/notify.server";
+import { listActiveSubscriptions, recordNotifyCartAdd, subscribeToNotify } from "../models/notify.server";
 import { getFeatureFlags } from "../models/settings.server";
 import { parseVariantIds } from "../utils/inventory.server";
 
@@ -41,6 +41,7 @@ export const loader = async ({ request }) => {
 
 // Storefront URL: /apps/konvert-notify/api/notify (App Proxy -> /proxy/api/notify)
 // op "open": starts a NOTIFY_ME engagement session.
+// op "cart_add": the emailed variant is in the cart after the customer came from a restock email (token from the link).
 // op "subscribe": one-click subscription. Only the variant id comes from the body;
 // shop and customer come from the signed proxy query, the email from the Admin API.
 export const action = async ({ request }) => {
@@ -66,7 +67,7 @@ export const action = async ({ request }) => {
     } catch {
       return noStoreJson({ error: "invalid_json" }, 400, requestId);
     }
-    if (!body || typeof body !== "object" || !["open", "subscribe"].includes(body.op)) {
+    if (!body || typeof body !== "object" || !["open", "subscribe", "cart_add"].includes(body.op)) {
       return noStoreJson({ error: "invalid_request" }, 400, requestId);
     }
 
@@ -84,6 +85,12 @@ export const action = async ({ request }) => {
       if (!variantGid) return noStoreJson({ error: "invalid_request" }, 400, requestId);
       variantNumber = variantGid.split("/").pop();
       result = await subscribeToNotify(identity, variantGid, { storefrontSoldOut: body.storefrontSoldOut === true });
+    } else if (body.op === "cart_add") {
+      const rawId = body.variantId;
+      const variantGid = typeof rawId === "string" || typeof rawId === "number" ? toGid("ProductVariant", rawId) : null;
+      if (!variantGid || typeof body.token !== "string") return noStoreJson({ error: "invalid_request" }, 400, requestId);
+      variantNumber = variantGid.split("/").pop();
+      result = await recordNotifyCartAdd(identity, { token: body.token, variantGid });
     } else {
       result = await recordNotifyMeOpen(identity);
     }

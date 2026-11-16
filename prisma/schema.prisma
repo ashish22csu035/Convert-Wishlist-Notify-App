@@ -65,6 +65,7 @@ enum ActivityType {
   NOTIFY_UNSUBSCRIBED
   RESTOCK_EMAIL_SENT
   RESTOCK_EMAIL_CLICKED
+  NOTIFY_ADDED_TO_CART
 }
 
 enum SubscriptionStatus {
@@ -112,6 +113,7 @@ model Shop {
   orders         ShopifyOrder[]
   webhookEvents  WebhookEvent[]
   analyticsDaily AnalyticsDaily[]
+  checkoutAttributions CheckoutAttribution[]
 }
 
 model ShopSettings {
@@ -153,6 +155,7 @@ model Actor {
   wishlistItems    WishlistItem[]
   subscriptions    NotifySubscription[]
   events           ActivityEvent[]
+  checkoutAttributions CheckoutAttribution[]
 
   @@unique([id, shopId])
   @@unique([shopId, customerGid])
@@ -251,10 +254,14 @@ model ActivityEvent {
   productGid        String?
   variantGid        String?
   occurredAt        DateTime     @default(now())
+  // Only NOTIFY_ADDED_TO_CART carries it: the restock email the customer came from. UNIQUE, so one email yields at most one
+  // cart-addition event however many times the storefront reports it (a retry, a second tab, a repeated callback).
+  emailDeliveryId   String?      @unique @db.Char(36)
 
-  actor        Actor              @relation(fields: [actorId, shopId], references: [id, shopId], onDelete: Cascade)
-  session      BrowsingSession?   @relation(fields: [browsingSessionId, shopId, feature], references: [id, shopId, feature], onDelete: Cascade)
-  attributions OrderAttribution[]
+  actor         Actor              @relation(fields: [actorId, shopId], references: [id, shopId], onDelete: Cascade)
+  session       BrowsingSession?   @relation(fields: [browsingSessionId, shopId, feature], references: [id, shopId, feature], onDelete: Cascade)
+  attributions  OrderAttribution[]
+  emailDelivery EmailDelivery?     @relation(fields: [emailDeliveryId], references: [id], onDelete: SetNull)
 
   @@index([shopId, occurredAt])
   @@index([shopId, type, occurredAt])
@@ -285,6 +292,18 @@ model AnalyticsDaily {
   notifyUnsubscribed      Int?
   wishlistSessionsCarried Int?
   notifyMeSessionsCarried Int?
+  // Product Funnel columns, added later; all four are NULL on a row written before they existed and then mean "not
+  // calculated yet" (never zero): the worker recalculates such a row and the funnel counts only rows that have them.
+  //   wishlistAddedToCart        WISHLIST_ADDED_TO_CART events of the day (a Wishlist row confirmed by Shopify's cart)
+  //   notifySubscriptionsCreated NotifySubscription rows CREATED that day, whatever their status is today
+  //   wishlistCheckouts / notifyCheckouts  CheckoutAttribution rows of the day per feature (one per checkout)
+  wishlistAddedToCart        Int?
+  notifySubscriptionsCreated Int?
+  wishlistCheckouts          Int?
+  notifyCheckouts            Int?
+  // Notify Me cart additions of the day (NOTIFY_ADDED_TO_CART events: the emailed variant, added after the email's link).
+  // NULL = not calculated yet, never zero.
+  notifyAddedToCart          Int?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -308,11 +327,15 @@ model EmailDelivery {
   sentAt            DateTime?
   outboundMessageId String?        @unique
   linkTokenHash     String?        @unique @db.Char(64)
+  // SHA-256 of the opaque token in the email's product link (?kw_n=). A different secret from the unsubscribe token, so a
+  // product URL that is shared or logged never carries the power to unsubscribe. NULL when nothing was sent.
+  cartTokenHash     String?        @unique @db.Char(64)
   errorCode         String?        @db.VarChar(64)
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
   subscription NotifySubscription @relation(fields: [subscriptionId, shopId], references: [id, shopId], onDelete: Cascade)
+  cartEvent    ActivityEvent?
 
   @@unique([subscriptionId, restockCycle])
   @@index([status, nextAttemptAt])
@@ -410,6 +433,28 @@ model OrderAttribution {
   @@unique([orderId, shopId, feature, matchedProductGid], map: "OrderAttribution_order_shop_feature_product_key")
   @@index([shopId, feature, attributedAt])
   @@index([touchEventId])
+}
+
+// A checkout started by a logged-in customer (webhook checkouts/create) that this app can tie to a funnel journey:
+// one row per checkout and feature. Wishlist: the checkout holds a product the customer added to the cart FROM the
+// Wishlist in the last 7 days. Notify Me: it holds a variant the customer was emailed a restock notice for in the last
+// 7 days. The same last-touch rules as OrderAttribution (chooseTouch) decide; guests and unmatched checkouts store nothing.
+// UNIQUE(shopId, checkoutKey, feature) makes a redelivered webhook a no-op.
+model CheckoutAttribution {
+  id           String   @id @default(uuid()) @db.Char(36)
+  shopId       String   @db.Char(36)
+  actorId      String   @db.Char(36)
+  checkoutKey  String   @db.VarChar(191)
+  feature      Feature
+  touchEventId String?  @db.Char(36)
+  startedAt    DateTime @db.DateTime(3)
+  createdAt    DateTime @default(now())
+
+  shop  Shop  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  actor Actor @relation(fields: [actorId, shopId], references: [id, shopId], onDelete: Cascade)
+
+  @@unique([shopId, checkoutKey, feature])
+  @@index([shopId, feature, startedAt])
 }
 
 // The old numeric id of every row whose primary key became a UUID v4, kept so a row can still be traced to
