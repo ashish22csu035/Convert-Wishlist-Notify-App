@@ -33,10 +33,10 @@ after(async () => {
   (await import("../app/db.server.js")).default.$disconnect();
 });
 
-const makeShop = async (tag, extra = {}) => {
+const makeShop = async (tag, installed = "2026-01-01T00:00:00Z", extra = {}) => {
   const domain = `kw-checkout-${tag}-${RUN}.myshopify.com`;
   domains.push(domain);
-  return prisma.shop.create({ data: { domain, currencyCode: "USD", installedAt: at("2026-01-01T00:00:00Z"), ...extra } });
+  return prisma.shop.create({ data: { domain, currencyCode: "USD", installedAt: at(installed), ...extra } });
 };
 const actorOf = (shop) => prisma.actor.create({ data: { shopId: shop.id, customerGid: `gid://shopify/Customer/${(counter += 1)}` } });
 const event = (shop, actor, type, iso, product = 1, variant = 11) =>
@@ -149,7 +149,7 @@ test("webhook handler: processes once, a redelivery and a second delivery of the
 });
 
 test("an uninstalled shop receives nothing", async () => {
-  const shop = await makeShop("gone", { status: "UNINSTALLED" });
+  const shop = await makeShop("gone", undefined, { status: "UNINSTALLED" });
   const actor = await actorOf(shop);
   await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-09T10:00:00Z", 1, 11);
   const result = await M.handleCheckoutWebhook({ shopDomain: shop.domain, topic: "checkouts/create", webhookId: "g1", eventId: "g1", payload: payload(actor, [[1, 11]]) });
@@ -214,10 +214,10 @@ test("every reason a checkout is not attributed is a distinct, recorded word", a
   const send = (suffix, body) => M.handleCheckoutWebhook({ shopDomain: shop.domain, topic: "checkouts/create", webhookId: `r-${RUN}-${suffix}`, eventId: `r-${RUN}-${suffix}`, payload: body });
   assert.equal((await send("1", payload(actor, []))).outcome, "no_items");
   assert.equal((await send("2", payload({ customerGid: "gid://shopify/Customer/424242" }, [[1, 11]]))).outcome, "unknown_customer");
-  assert.equal((await send("3", payload(actor, [[1, 11]]))).outcome, "no_touch", "a known customer with no cart addition from the Wishlist");
+  assert.equal((await send("3", payload(actor, [[1, 11]]))).outcome, "no_touch_no_events", "a known customer with no cart addition from the Wishlist");
   assert.equal((await rows(shop)).length, 0);
   const reasons = (await prisma.webhookEvent.findMany({ where: { shopId: shop.id } })).map((r) => r.errorCode).sort();
-  assert.deepEqual(reasons, ["no_items", "no_touch", "unknown_customer"]);
+  assert.deepEqual(reasons, ["no_items", "no_touch_no_events", "unknown_customer"]);
 });
 
 test("an ineligible checkout (stale cart addition) never counts, even through checkouts/update", async () => {
@@ -225,7 +225,7 @@ test("an ineligible checkout (stale cart addition) never counts, even through ch
   const actor = await actorOf(shop);
   await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-01T10:00:00Z", 1, 11); // 9 days before
   const body = payload(actor, [[1, 11]], { created_at: "2026-10-10T12:00:00Z" });
-  assert.equal((await M.handleCheckoutWebhook({ shopDomain: shop.domain, topic: "checkouts/update", webhookId: "i1", eventId: "i1", payload: body })).outcome, "no_touch");
+  assert.equal((await M.handleCheckoutWebhook({ shopDomain: shop.domain, topic: "checkouts/update", webhookId: "i1", eventId: "i1", payload: body })).outcome, "no_touch_stale");
   assert.equal((await rows(shop)).length, 0);
 });
 
@@ -236,4 +236,128 @@ test("both topics are registered for the app and routed to the verified handler"
   }
   const update = fs.readFileSync("app/routes/webhooks.checkouts.update.jsx", "utf8");
   assert.match(update, /export const action = checkoutsCreateAction/);
+});
+
+// ======================= the touch is recorded just after the checkout was created =======================
+const sendHook = (shop, topic, suffix, body, triggeredAt) => M.handleCheckoutWebhook({ shopDomain: shop.domain, topic, webhookId: `a-${RUN}-${suffix}`, eventId: `a-${RUN}-${suffix}`, triggeredAt, payload: body });
+
+test("a touch recorded seconds AFTER the checkout's created_at (the real dev-store ordering) is credited through the webhook's snapshot", async () => {
+  // dev store, Notify Me: checkout created_at 11:53:26, the cart addition recorded at 11:53:28.377; Wishlist the same way
+  const shop = await makeShop("late-wl");
+  const actor = await actorOf(shop);
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:00:03.377Z", 1, 11);
+  const body = payload(actor, [[1, 11]], { token: `late-${RUN}`, created_at: "2026-10-10T12:00:00Z" });
+  assert.deepEqual(await sendHook(shop, "checkouts/create", "1", body, "2026-10-10T12:00:12Z"), { status: 200, outcome: "processed" });
+  const stored = await rows(shop);
+  assert.deepEqual(stored.map((r) => [r.feature, r.startedAt.toISOString()]), [["WISHLIST", "2026-10-10T12:00:00.000Z"]], "startedAt stays the checkout's own created_at");
+  const touch = await prisma.activityEvent.findUnique({ where: { id: stored[0].touchEventId } });
+  assert.equal(touch.occurredAt.toISOString(), "2026-10-10T12:00:03.377Z", "tied to the right touch event");
+
+  // the same data without the delivery time keeps the strict comparison, and says exactly why
+  const strict = await makeShop("late-strict");
+  const a2 = await actorOf(strict);
+  await event(strict, a2, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:00:03.377Z", 1, 11);
+  assert.deepEqual(await sendHook(strict, "checkouts/create", "2", payload(a2, [[1, 11]], { token: `late2-${RUN}`, created_at: "2026-10-10T12:00:00Z" })), { status: 200, outcome: "no_touch_recorded_late" });
+  assert.equal((await rows(strict)).length, 0);
+});
+
+test("Notify Me and Wishlist are attributed independently when their touches are recorded just after the checkout started", async () => {
+  const shop = await makeShop("late-both");
+  const actor = await actorOf(shop);
+  await event(shop, actor, "RESTOCK_EMAIL_SENT", "2026-10-10T12:00:02.400Z", 4, 41);
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:00:04Z", 1, 11);
+  const body = payload(actor, [[1, 11], [4, 41]], { token: `both-${RUN}`, created_at: "2026-10-10T12:00:00Z" });
+  assert.equal((await sendHook(shop, "checkouts/create", "3", body, "2026-10-10T12:00:10Z")).outcome, "processed");
+  assert.deepEqual((await rows(shop)).map((r) => r.feature), ["WISHLIST", "NOTIFY_ME"]);
+});
+
+test("the grace is bounded: a touch recorded long after the checkout started is never credited, even by a late update", async () => {
+  const shop = await makeShop("grace");
+  const actor = await actorOf(shop);
+  const created = "2026-10-10T12:00:00Z";
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:06:00Z", 1, 11); // 6 minutes after created_at
+  const body = payload(actor, [[1, 11]], { token: `grace-${RUN}`, created_at: created });
+  assert.equal((await sendHook(shop, "checkouts/update", "4", body, "2026-10-10T12:07:00Z")).outcome, "no_touch_recorded_late", "the snapshot is capped 5 minutes after created_at");
+  const inside = await makeShop("grace-in");
+  const a2 = await actorOf(inside);
+  await event(inside, a2, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:04:00Z", 1, 11); // 4 minutes after created_at
+  assert.equal((await sendHook(inside, "checkouts/update", "5", payload(a2, [[1, 11]], { token: `grace2-${RUN}`, created_at: created }), "2026-10-10T12:07:00Z")).outcome, "processed");
+  // a nonsensical delivery time (before creation, or in the future) is ignored: the strict created_at comparison applies
+  const s = M.snapshotAt(M.parseCheckout({ token: "t", created_at: created }), "2026-10-10T11:00:00Z");
+  assert.equal(s.toISOString(), "2026-10-10T12:00:00.000Z");
+  assert.equal(M.snapshotAt(M.parseCheckout({ token: "t", created_at: created }), "2999-01-01T00:00:00Z").toISOString(), "2026-10-10T12:00:00.000Z");
+  assert.equal(M.snapshotAt(M.parseCheckout({ token: "t", created_at: created }), "not a date").toISOString(), "2026-10-10T12:00:00.000Z");
+});
+
+test("the 7-day window boundary is exact, measured back from the snapshot", async () => {
+  const shop = await makeShop("bound");
+  const actor = await actorOf(shop);
+  const created = "2026-10-10T12:00:00.000Z";
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-03T12:00:00.000Z", 1, 11); // exactly 7 days before
+  assert.equal(await M.attributeCheckout(prisma, shop.id, M.parseCheckout(payload(actor, [[1, 11]], { token: "b-exact", created_at: created }))), 1);
+  const older = await makeShop("bound-old");
+  const a2 = await actorOf(older);
+  await event(older, a2, "WISHLIST_ADDED_TO_CART", "2026-10-03T11:59:59.999Z", 1, 11); // 1 ms too old
+  const result = await M.attributeCheckoutWithReason(prisma, older.id, M.parseCheckout(payload(a2, [[1, 11]], { token: "b-old", created_at: created })));
+  assert.deepEqual(result, { features: 0, reason: "no_touch_stale" });
+});
+
+test("every unmatched checkout carries a specific reason, and only the reason: no personal data", async () => {
+  const shop = await makeShop("reasons2");
+  const actor = await actorOf(shop);
+  const check = async (key, lines, body = {}) => (await M.attributeCheckoutWithReason(prisma, shop.id, M.parseCheckout(payload(actor, lines, { token: key, created_at: "2026-10-10T12:00:00Z", ...body })))).reason;
+  assert.equal(await check("r1", [[1, 11]]), "no_touch_no_events", "the customer has nothing recorded");
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-09T12:00:00Z", 1, 11);
+  await event(shop, actor, "RESTOCK_EMAIL_SENT", "2026-10-09T12:00:00Z", 4, 41);
+  assert.equal(await check("r2", [[9, 91]]), "no_touch_other_product", "a different product");
+  assert.equal(await check("r3", [[4, 42]]), "no_touch_other_product", "Notify Me needs the exact emailed variant");
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:30:00Z", 7, 71);
+  assert.equal(await check("r4", [[7, 71]]), "no_touch_recorded_late", "recorded after the checkout");
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-09-20T12:00:00Z", 8, 81);
+  assert.equal(await check("r5", [[8, 81]]), "no_touch_stale", "older than 7 days");
+  assert.equal((await rows(shop)).length, 0, "none of them was attributed");
+  const log = JSON.stringify(await prisma.webhookEvent.findMany({ where: { shopId: shop.id } }));
+  assert.equal(/example\.invalid|secret/.test(log), false);
+});
+
+test("store isolation: another shop's touches and customers are never used", async () => {
+  const mine = await makeShop("iso-a");
+  const other = await makeShop("iso-b");
+  const customerGid = `gid://shopify/Customer/${(counter += 1)}`;
+  const here = await prisma.actor.create({ data: { shopId: mine.id, customerGid } });
+  const there = await prisma.actor.create({ data: { shopId: other.id, customerGid } }); // the same Shopify customer in another store
+  await event(other, there, "WISHLIST_ADDED_TO_CART", "2026-10-09T12:00:00Z", 1, 11);
+  const body = payload(here, [[1, 11]], { token: `iso-${RUN}`, created_at: "2026-10-10T12:00:00Z" });
+  assert.deepEqual(await sendHook(mine, "checkouts/create", "6", body), { status: 200, outcome: "no_touch_no_events" });
+  assert.equal((await rows(mine)).length + (await rows(other)).length, 0);
+  // the same checkout in the shop that does hold the touch is attributed, to that shop only
+  assert.equal((await sendHook(other, "checkouts/create", "7", body)).outcome, "processed");
+  assert.deepEqual([(await rows(mine)).length, (await rows(other)).length], [0, 1]);
+});
+
+test("daily metrics: attributed checkouts are summarised per shop and day once, whatever the number of create and update deliveries", async () => {
+  const analyticsWorker = await import("../app/worker/analytics-daily.server.js");
+  const reporting = await import("../app/models/reporting.server.js");
+  const P = await import("../app/utils/period.js");
+  const NOW = new Date("2026-10-22T10:00:00.000Z");
+  const shop = await makeShop("daily", "2026-10-01T00:00:00Z");
+  const other = await makeShop("daily-other", "2026-10-01T00:00:00Z");
+  const actor = await actorOf(shop);
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-20T11:59:57Z", 1, 11); // recorded 3 s after the checkout began
+  await event(shop, actor, "RESTOCK_EMAIL_SENT", "2026-10-20T09:00:00Z", 4, 41);
+  const body = payload(actor, [[1, 11], [4, 41]], { token: `daily-${RUN}`, created_at: "2026-10-20T11:59:54Z" });
+  for (const [topic, suffix] of [["checkouts/create", "d1"], ["checkouts/create", "d1"], ["checkouts/update", "d2"], ["checkouts/update", "d3"]]) await sendHook(shop, topic, suffix, body, "2026-10-20T12:00:06Z");
+  assert.equal((await rows(shop)).length, 2, "one row per feature however many deliveries");
+  const run = (s) => analyticsWorker.runAnalyticsDaily({ now: () => NOW, shopIds: [s.id], backfillPerShop: 400, log: { log() {}, error() {} }, invalidate: async () => {} });
+  await run(shop);
+  await run(shop);
+  await run(other);
+  const summary = async (s) => (await reporting.getFunnelSummary(await reporting.getShopByDomain(s.domain), P.customPeriod("2026-10-20", "2026-10-20", NOW).period, NOW)).range;
+  const mineRange = await summary(shop);
+  assert.deepEqual([mineRange.wishlistCheckouts, mineRange.notifyCheckouts], [1, 1], "the right shop, the right day, counted once");
+  assert.deepEqual([(await summary(other)).wishlistCheckouts, (await summary(other)).notifyCheckouts], [0, 0], "another shop is unaffected");
+  const wrongDay = (await reporting.getFunnelSummary(await reporting.getShopByDomain(shop.domain), P.customPeriod("2026-10-21", "2026-10-21", NOW).period, NOW)).range;
+  assert.deepEqual([wrongDay.wishlistCheckouts, wrongDay.notifyCheckouts], [0, 0], "and not on another day");
+  const day = await prisma.analyticsDaily.findFirst({ where: { shopId: shop.id, day: new Date("2026-10-20T00:00:00Z") } });
+  assert.deepEqual([day.wishlistCheckouts, day.notifyCheckouts], [1, 1]);
 });
