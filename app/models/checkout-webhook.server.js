@@ -31,13 +31,14 @@ import { claimEvent } from "./order-webhook.server";
 // added the product (the storefront reports the addition once Shopify's cart confirms it). A customer who goes straight to
 // checkout can therefore have a touch stamped a few seconds after the checkout's own created_at. A real example from the dev
 // store: checkout created_at 11:53:26, the Notify Me cart-addition recorded at 11:53:28.377. Comparing touches to created_at
-// alone rejects exactly the customers who check out fastest. So a touch counts when it was recorded up to the moment of the
-// webhook's snapshot of the checkout (snapshotAt: Shopify's triggered-at time), but never more than GRACE_MS after created_at,
-// so a checkout cannot be credited to something the customer did long after starting it. The product still has to be in the
-// checkout payload and the touch inside the 7-day window measured back from snapshotAt.
+// alone rejects exactly the customers who check out fastest. And created_at can be hours OLDER than the journey: Shopify keeps a
+// cart (and the checkout built on it) alive, and a real checkout had created_at 14:14 while its Wishlist cart additions were at
+// 17:31 and its create webhook was triggered at 17:32. So a touch counts when it was recorded up to the moment the webhook
+// describes (snapshotAt: Shopify's triggered-at time, which is when the payload was true), whatever created_at says. The product
+// still has to be in the checkout payload, the touch inside the 7-day window measured back from snapshotAt, and anything
+// recorded after the snapshot is never credited.
 const WINDOW_MS = ATTRIBUTION_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const FUNNEL_TOUCHES = ["WISHLIST_ADDED_TO_CART", "RESTOCK_EMAIL_SENT"];
-const GRACE_MS = 5 * 60 * 1000;
 const CLASSIFY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const CLASSIFY_LOOKAHEAD_MS = 60 * 60 * 1000;
 const CREATE_TOPIC = "CHECKOUTS_CREATE";
@@ -61,12 +62,12 @@ export function parseCheckout(payload) {
 }
 
 // Pure. The moment the checkout payload is a snapshot of: Shopify's triggered-at time when it is usable (not before the
-// checkout was created, not in the future), capped at GRACE_MS after created_at; otherwise created_at itself.
+// checkout was created, not in the future); otherwise created_at itself.
 export function snapshotAt(checkout, triggeredAt, now = new Date()) {
   const start = checkout.startedAt.getTime();
   const triggered = triggeredAt instanceof Date ? triggeredAt.getTime() : new Date(triggeredAt ?? NaN).getTime();
   if (!Number.isFinite(triggered) || triggered < start || triggered > now.getTime() + 60 * 1000) return checkout.startedAt;
-  return new Date(Math.min(triggered, start + GRACE_MS));
+  return new Date(triggered);
 }
 
 // Writes the rows of one checkout. Returns { features, reason }: how many features it was attributed to and, when that is 0,

@@ -271,22 +271,29 @@ test("Notify Me and Wishlist are attributed independently when their touches are
   assert.deepEqual((await rows(shop)).map((r) => r.feature), ["WISHLIST", "NOTIFY_ME"]);
 });
 
-test("the grace is bounded: a touch recorded long after the checkout started is never credited, even by a late update", async () => {
+test("the snapshot is the moment the webhook describes: a touch recorded after it is never credited, and a stale created_at does not hide earlier touches", async () => {
   const shop = await makeShop("grace");
   const actor = await actorOf(shop);
   const created = "2026-10-10T12:00:00Z";
-  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:06:00Z", 1, 11); // 6 minutes after created_at
+  await event(shop, actor, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:07:30Z", 1, 11); // recorded AFTER the update below was triggered
   const body = payload(actor, [[1, 11]], { token: `grace-${RUN}`, created_at: created });
-  assert.equal((await sendHook(shop, "checkouts/update", "4", body, "2026-10-10T12:07:00Z")).outcome, "no_touch_recorded_late", "the snapshot is capped 5 minutes after created_at");
-  const inside = await makeShop("grace-in");
-  const a2 = await actorOf(inside);
-  await event(inside, a2, "WISHLIST_ADDED_TO_CART", "2026-10-10T12:04:00Z", 1, 11); // 4 minutes after created_at
-  assert.equal((await sendHook(inside, "checkouts/update", "5", payload(a2, [[1, 11]], { token: `grace2-${RUN}`, created_at: created }), "2026-10-10T12:07:00Z")).outcome, "processed");
+  assert.equal((await sendHook(shop, "checkouts/update", "4", body, "2026-10-10T12:07:00Z")).outcome, "no_touch_recorded_late");
+  // the real dev-store case: created_at 14:14, the cart additions at 17:31, the create webhook at 17:32
+  const stale = await makeShop("stale-created");
+  const a2 = await actorOf(stale);
+  await event(stale, a2, "WISHLIST_ADDED_TO_CART", "2026-10-10T17:31:56Z", 1, 11);
+  await event(stale, a2, "WISHLIST_ADDED_TO_CART", "2026-10-10T17:31:59Z", 2, 22);
+  const old = payload(a2, [[1, 11], [2, 22]], { token: `grace2-${RUN}`, created_at: "2026-10-10T14:14:40Z" });
+  assert.equal((await sendHook(stale, "checkouts/create", "5", old, "2026-10-10T17:32:16Z")).outcome, "processed");
+  const stored = await rows(stale);
+  assert.equal(stored.length, 1, "one checkout row for two products");
+  const touch = await prisma.activityEvent.findUnique({ where: { id: stored[0].touchEventId } });
+  assert.equal(touch.occurredAt.toISOString(), "2026-10-10T17:31:59.000Z", "credited to the latest cart addition, not to an older one");
   // a nonsensical delivery time (before creation, or in the future) is ignored: the strict created_at comparison applies
-  const s = M.snapshotAt(M.parseCheckout({ token: "t", created_at: created }), "2026-10-10T11:00:00Z");
-  assert.equal(s.toISOString(), "2026-10-10T12:00:00.000Z");
+  assert.equal(M.snapshotAt(M.parseCheckout({ token: "t", created_at: created }), "2026-10-10T11:00:00Z").toISOString(), "2026-10-10T12:00:00.000Z");
   assert.equal(M.snapshotAt(M.parseCheckout({ token: "t", created_at: created }), "2999-01-01T00:00:00Z").toISOString(), "2026-10-10T12:00:00.000Z");
   assert.equal(M.snapshotAt(M.parseCheckout({ token: "t", created_at: created }), "not a date").toISOString(), "2026-10-10T12:00:00.000Z");
+  assert.equal(M.snapshotAt(M.parseCheckout({ token: "t", created_at: created }), "2026-10-10T17:32:16Z").toISOString(), "2026-10-10T17:32:16.000Z");
 });
 
 test("the 7-day window boundary is exact, measured back from the snapshot", async () => {
