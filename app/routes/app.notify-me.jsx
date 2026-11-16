@@ -17,6 +17,7 @@ import {
   Pager,
   ParamSelect,
   ProductCell,
+  REVENUE_TIPS,
   STATUS_HELP,
   StatusBadge,
   Tabs,
@@ -140,14 +141,14 @@ export default function NotifyMePage() {
       ) : (
         <>
           <Grid>
-            <KpiCard label="Active subscriptions" value={o.subscriptions.ACTIVE} icon="notification" tone="blue" note={`Current total · ${formatNumber(o.window.subscribed)} new ${words.within}`} hint="Customers who are waiting for a sold-out item right now. This is a current total; the note shows new sign-ups in the date range." />
-            <KpiCard label="Customers notified" value={o.customersNotified} icon="check-circle" tone="blue" note="All time" hint="Distinct customer records (app-generated IDs) that have had at least one restock email accepted by the mail server. A customer with several subscriptions, restocks or emails counts once. It does not use the date range, and one person with more than one record would count more than once." />
-            <KpiCard label="Emails sent" value={o.deliveries.SENT} icon="email" tone="blue" note={`All time · ${formatNumber(o.window.emailsSent)} ${words.within}`} hint="Emails accepted by the mail server. Accepted does not confirm they reached the inbox or were opened." />
-            <KpiCard label="Queued or sending" value={o.deliveries.PENDING + o.deliveries.SENDING} icon="clock" tone="blue" note="Right now" hint="Emails waiting for the email worker, or being sent at this moment. Run the worker to send queued mail." />
+            <KpiCard label="Active subscriptions" value={o.subscriptions.ACTIVE} icon="notification" tone="blue" note={`Current total · ${formatNumber(o.window.subscribed)} new ${words.within}`} hint="Customers waiting for a sold-out item to return." />
+            <KpiCard label="Customers notified" value={o.customersNotified} icon="check-circle" tone="blue" note="All time" hint="Customer records sent at least one restock email." />
+            <KpiCard label="Emails sent" value={o.deliveries.SENT} icon="email" tone="blue" note={`All time · ${formatNumber(o.window.emailsSent)} ${words.within}`} hint="Restock emails sent." />
+            <KpiCard label="Queued or sending" value={o.deliveries.PENDING + o.deliveries.SENDING} icon="clock" tone="blue" note="Right now" hint="Emails waiting to be sent or currently being sent." />
             {revenueOption ? (
               <KpiCard label="Notify Me-attributed revenue" value={revenueOption.value} display={revenueOption.display} icon="cart" tone="green" note={revenueOption.details.join(" · ")} hint={revenueOption.hint} />
             ) : (
-              <KpiCard label="Notify Me-attributed revenue" value={null} display={revenueSetup.display} icon="cart" note={revenueSetup.note} hint="Revenue from items bought after a restock email for that exact variant was sent, 7-day last touch." />
+              <KpiCard label="Notify Me-attributed revenue" value={null} display={revenueSetup.display} icon="cart" note={revenueSetup.note} hint={REVENUE_TIPS.notifyMe} />
             )}
           </Grid>
 

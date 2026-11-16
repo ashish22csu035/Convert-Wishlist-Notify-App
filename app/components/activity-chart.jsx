@@ -1,9 +1,12 @@
 /* eslint-disable react/prop-types -- plain JavaScript project: shared helper components are not given PropTypes */
 
-import { useState } from "react";
+import { useId, useState } from "react";
+import { monotonePath } from "../utils/curve";
 
 // A small dependency-free line/area chart drawn as SVG. It only draws the numbers it is given:
-// one value per day per series, from real counts. Nothing is smoothed, extrapolated or invented.
+// one value per day per series, from real counts. Nothing is extrapolated or invented. The lines are curved with a
+// monotone cubic interpolation (utils/curve.js monotonePath): every curve passes exactly through each day's point and never rises
+// above a peak or dips below a trough between two days, so a zero day stays on zero and a spike stays at its real height.
 // Hovering (or touching, or arrowing through) a day shows a tooltip with that day's exact value for EVERY series, read from
 // the same arrays the lines are drawn from.
 
@@ -26,6 +29,7 @@ const count = (value) => new Intl.NumberFormat("en-US").format(value);
 // days: ["2026-10-01", ...]; series: [{ key, label, color, values: [number, ...] }]
 export function ActivityChart({ days, series, label }) {
   const [hover, setHover] = useState(null); // index of the day under the pointer / focus, or null
+  const fillId = `kv-area-${useId().replace(/:/g, "")}`;
   const total = series.reduce((sum, s) => sum + s.values.reduce((a, b) => a + b, 0), 0);
   if (days.length === 0 || total === 0) {
     return (
@@ -87,16 +91,23 @@ export function ActivityChart({ days, series, label }) {
             </text>
           ) : null,
         )}
-        {series.map((s) => {
-          const line = s.values.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-          const area = `${line} L${x(days.length - 1).toFixed(1)},${y(0)} L${x(0).toFixed(1)},${y(0)} Z`;
+        <defs>
+          {/* One very light neutral wash, under the first series only: black fading to nothing at the baseline. */}
+          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" style={{ stopColor: "var(--kv-primary)" }} stopOpacity="0.1" />
+            <stop offset="100%" style={{ stopColor: "var(--kv-primary)" }} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {series.map((s, index) => {
+          const line = monotonePath(s.values.map((v, i) => [x(i), y(v)]));
+          const area = `${line} L${x(days.length - 1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`;
           return (
             <g key={s.key}>
-              {days.length > 1 ? <path d={area} fill={s.color} opacity="0.1" /> : null}
-              {days.length > 1 ? <path d={line} fill="none" stroke={s.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" /> : null}
+              {days.length > 1 && index === 0 ? <path d={area} fill={`url(#${fillId})`} stroke="none" /> : null}
+              {days.length > 1 ? <path d={line} fill="none" stroke={s.color} strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round" /> : null}
               {days.length <= 45
                 ? s.values.map((v, i) => (
-                    <circle key={days[i]} cx={x(i)} cy={y(v)} r={days.length === 1 ? 4 : 2.5} fill="var(--kv-surface)" stroke={s.color} strokeWidth="1.5">
+                    <circle key={days[i]} cx={x(i)} cy={y(v)} r={days.length === 1 ? 3.5 : 2.25} fill="var(--kv-surface)" stroke={s.color} strokeWidth="1.5">
                       <title>{`${monthDay(days[i])}: ${v} ${s.label.toLowerCase()}`}</title>
                     </circle>
                   ))

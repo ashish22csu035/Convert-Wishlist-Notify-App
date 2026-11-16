@@ -47,6 +47,11 @@ export const SPEC = {
   },
   productPage: {
     enabled: bool(true),
+    // What the product page shows: the Wishlist button block (today's behaviour), a standalone icon, or both. The icon
+    // needs no block: the Wishlist embed lays it over the product's main image. Its shape is the one chosen in General (iconType);
+    // imagePosition is the corner of that image, and is only used when an icon is shown.
+    displayMode: enumOf(["button", "icon", "both"], "button"),
+    imagePosition: enumOf(["top-right", "top-left", "bottom-left", "bottom-right"], "top-right"),
     buttonType: enumOf(["icon_text", "icon"], "icon_text"),
     // Horizontal alignment inside the app block. It only shows when the width is not "full". WHERE the block sits
     // on the page (for example under Add to cart) is chosen in the theme editor, not here.
@@ -74,6 +79,7 @@ export const SECTIONS = Object.keys(SPEC);
 // Labels for the screen. Values are the ones in SPEC.
 export const OPTION_LABELS = {
   iconType: [["heart", "Heart"], ["star", "Star"], ["bookmark", "Bookmark"]],
+  displayMode: [["button", "Button only"], ["icon", "Icon only"], ["both", "Both icon and button"]],
   buttonType: [["icon_text", "Icon with text"], ["icon", "Icon only"]],
   productPosition: [["left", "Left"], ["center", "Center"], ["right", "Right"]],
   buttonStyle: [["outline", "Outline"], ["filled", "Filled"]],

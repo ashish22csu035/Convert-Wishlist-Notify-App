@@ -21,7 +21,6 @@ const OUT_DIR = path.resolve("node_modules/.cache/kw-toggle-test");
 let ToggleKpiCard;
 let wishlistItemsView;
 let attributionView;
-let ATTRIBUTION_FOOTNOTE;
 let WISHLIST_ITEM_MODES;
 let React;
 let createRoot;
@@ -50,7 +49,7 @@ before(async () => {
     logLevel: "silent",
   });
   ({ ToggleKpiCard } = await import(pathToFileURL(outfile).href));
-  ({ WISHLIST_ITEM_MODES, wishlistItemsView, attributionView, ATTRIBUTION_FOOTNOTE } = await import("../app/utils/format.js"));
+  ({ WISHLIST_ITEM_MODES, wishlistItemsView, attributionView } = await import("../app/utils/format.js"));
   React = (await import("react")).default;
   ({ createRoot } = await import("react-dom/client"));
 });
@@ -167,13 +166,12 @@ test("revenue card: three options render, Overall is the default, each switch ch
   assert.equal(text(".kv-kpi-value"), "$90.00");
   // the card itself stays short: figure, attributed orders and the full value of those orders
   assert.deepEqual(notes(), ["3 attributed orders · last 30 days", "Full order value: $140.00"]);
-  assert.equal(notes().some((n) => /not the whole order|Last touch/.test(n)), false, "no long copy on the card");
+  assert.equal(notes().some((n) => /minus refunds/.test(n)), false, "no long copy on the card");
   const info = container.querySelector("button.kv-hint");
   assert.ok(info, "an (i) button is present");
-  assert.match(hintText(), /counted once/);
-  assert.match(hintText(), /not the whole order/, "the tooltip says revenue is only the eligible items");
-  assert.match(hintText(), /Last touch within 7 days/);
-  assert.ok(container.querySelector("s-tooltip").textContent.includes("not the whole order"), "the tooltip content is in the page for hover and focus");
+  assert.match(hintText(), /Sales from products linked to Wishlist or Notify Me/);
+  assert.doesNotMatch(hintText(), /refund/i, "the tooltip has no refund disclaimer");
+  assert.ok(container.querySelector("s-tooltip").textContent.includes("Sales from products linked"), "the tooltip content is in the page for hover and focus");
 
   await click(buttons()[1]); // Wishlist
   assert.equal(text(".kv-kpi-value"), "$60.00");
@@ -184,7 +182,7 @@ test("revenue card: three options render, Overall is the default, each switch ch
   await click(buttons()[2]); // Notify Me: a confirmed zero
   assert.equal(text(".kv-kpi-value"), "$0.00");
   assert.deepEqual(notes(), ["0 attributed orders · last 30 days"]);
-  assert.match(hintText(), /restock email/);
+  assert.match(hintText(), /after a restock email/);
   assert.deepEqual(pressed(), ["false", "false", "true"]);
 
   await click(buttons()[0]);

@@ -27,7 +27,7 @@ const {
 test("defaults reproduce today's storefront: nothing set, theme fonts on, everything shown", () => {
   assert.deepEqual(DEFAULT_APPEARANCE, {
     general: { iconType: "heart", defaultColor: null, hoverColor: null, activeColor: null, useThemeFonts: true },
-    productPage: { enabled: true, buttonType: "icon_text", position: "left", buttonStyle: "outline", buttonRadius: null, widthMode: "full", manualWidth: 240 },
+    productPage: { enabled: true, displayMode: "button", imagePosition: "top-right", buttonType: "icon_text", position: "left", buttonStyle: "outline", buttonRadius: null, widthMode: "full", manualWidth: 240 },
     collectionPage: { enabled: true, iconSize: 22, backgroundOpacity: 92, position: "top-right", countDisplay: "header_badge" },
     wishlistPage: { layout: "table", headerIcon: true },
   });
@@ -45,7 +45,7 @@ test("missing, null, empty, damaged or hostile configuration resolves to the def
 });
 
 test("enum values: only the listed options are accepted", () => {
-  for (const [path, bad] of [["general.iconType", "circle"], ["general.iconType", "STAR"], ["general.iconType", ""], ["general.iconType", 1], ["productPage.buttonType", "text"], ["productPage.position", "top"], ["productPage.buttonStyle", "ghost"], ["productPage.widthMode", "wide"], ["collectionPage.position", "center"], ["collectionPage.countDisplay", "product"], ["wishlistPage.layout", "list"], ["wishlistPage.layout", ["grid"]], ["wishlistPage.layout", { toString: "grid" }]]) {
+  for (const [path, bad] of [["general.iconType", "circle"], ["general.iconType", "STAR"], ["general.iconType", ""], ["general.iconType", 1], ["productPage.buttonType", "text"], ["productPage.displayMode", "none"], ["productPage.displayMode", "ICON"], ["productPage.displayMode", ""], ["productPage.imagePosition", "center"], ["productPage.imagePosition", "top"], ["productPage.imagePosition", "TOP-RIGHT"], ["productPage.position", "top"], ["productPage.buttonStyle", "ghost"], ["productPage.widthMode", "wide"], ["collectionPage.position", "center"], ["collectionPage.countDisplay", "product"], ["wishlistPage.layout", "list"], ["wishlistPage.layout", ["grid"]], ["wishlistPage.layout", { toString: "grid" }]]) {
     const [section, key] = path.split(".");
     const { errors, values } = validateAppearance({ [section]: { [key]: bad } });
     assert.deepEqual(Object.keys(errors), [path], `${path} = ${JSON.stringify(bad)} is refused`);
@@ -437,4 +437,21 @@ dbTest("migration: additive and nullable; existing shops, settings, ids and cons
   } finally {
     await scratch.$disconnect();
   }
+});
+
+test("product page display mode and image position: every option is accepted, the default keeps today's button, and sparse storage only holds changes", () => {
+  for (const mode of ["button", "icon", "both"]) assert.deepEqual(validateAppearance({ productPage: { displayMode: mode } }).errors, {}, mode);
+  for (const corner of ["top-right", "top-left", "bottom-left", "bottom-right"]) assert.deepEqual(validateAppearance({ productPage: { imagePosition: corner } }).errors, {}, corner);
+  assert.equal(DEFAULT_APPEARANCE.productPage.displayMode, "button", "existing merchants keep the button");
+  assert.equal(DEFAULT_APPEARANCE.productPage.imagePosition, "top-right");
+  assert.equal("iconStyle" in DEFAULT_APPEARANCE.productPage, false, "no separate icon style: the General icon is used everywhere");
+  assert.deepEqual(toSparse({ productPage: { displayMode: "button", imagePosition: "top-right" } }), { version: APPEARANCE_VERSION }, "defaults are not stored");
+  assert.deepEqual(toSparse({ productPage: { displayMode: "both", imagePosition: "bottom-left" } }), { version: APPEARANCE_VERSION, productPage: { displayMode: "both", imagePosition: "bottom-left" } });
+  assert.equal(resolveAppearance({ productPage: { displayMode: "icon" } }).productPage.buttonStyle, "outline", "the other product page settings are untouched");
+  assert.equal(resolveAppearance({ productPage: { displayMode: "banner", imagePosition: "middle" } }).productPage.imagePosition, "top-right", "a damaged value falls back on its own");
+  // independent of the collection page position, and a stored document from before this setting (or with a retired key) still loads
+  const both = resolveAppearance({ productPage: { imagePosition: "bottom-right" }, collectionPage: { position: "top-left" } });
+  assert.deepEqual([both.productPage.imagePosition, both.collectionPage.position], ["bottom-right", "top-left"]);
+  assert.equal(resolveAppearance({ productPage: { iconStyle: "star" } }).productPage.imagePosition, "top-right");
+  assert.deepEqual(normalizeStored({ version: 1, productPage: { iconStyle: "star", displayMode: "icon" } }), { version: 1, productPage: { displayMode: "icon" } }, "a retired key is dropped, the rest is kept");
 });

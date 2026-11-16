@@ -104,7 +104,7 @@ function productPage() {
 <main class="pv-main">
   <p class="pv-crumbs">Home / Shop / Classic cotton tee</p>
   <div class="pv-product">
-    <div class="pv-gallery">${image(PRODUCTS[0], " pv-img--square")}<div class="pv-thumbs">${thumbs}</div></div>
+    <div class="pv-gallery"><div class="pv-hero">${image(PRODUCTS[0], " pv-img--square")}<div class="kw-prodicon"><button type="button" class="kw-btn kw-btn--product kw-btn--prodicon" data-kw-button aria-pressed="false" tabindex="-1">${heart}<span class="kw-btn__label" data-kw-label>Add to wishlist</span></button></div></div><div class="pv-thumbs">${thumbs}</div></div>
     <div class="pv-details">
       <p class="pv-vendor">Sample Store</p>
       <h1 class="pv-ptitle">Classic cotton tee</h1>
@@ -221,6 +221,7 @@ ul { list-style: none; }
 .pv-product { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 44px; align-items: start; }
 .pv-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
 .pv-vendor { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: #777; }
+.pv-hero { position: relative; }
 .pv-ptitle { margin: 4px 0 6px; font-size: 30px; line-height: 1.2; font-weight: 400; }
 .pv-pprice { font-size: 20px; }
 .pv-desc { margin: 12px 0 16px; color: #444; }

@@ -508,6 +508,122 @@
     document.addEventListener('shopify:section:load', recheck);
   }
 
+  /* ---------- product page icon ---------- */
+
+  // Wishlist Settings > Product page > Display on product page = Icon only / Both: a standalone icon button laid over the
+  // product's main image, top right. It needs no app block: the Wishlist embed's script puts it there. It is a
+  // .kw-btn--product, so saving, the selected variant and the saved state all use the product page button's own code. The
+  // product comes from the config the Liquid snippet printed (product id, title, handle, first variant).
+  //
+  // Placement works from the page itself, not from one theme's class names: the main image is the largest visible picture in
+  // the product section (outside the header, footer, dialogs, thumbnails and the cart form); its host is the highest ancestor
+  // that is still the size of that image (not a gallery that also holds the thumbnail strip) and is not a link, a button or a scrolling track. The host gets position:
+  // relative if it has none, and the icon is appended to it, so it stays on the image in a gallery too (a slider scrolls
+  // inside the host). If no main image can be found, no icon is added.
+  function productConfig() {
+    var found = {};
+    var nodes = document.querySelectorAll('script[data-kw-config]');
+    for (var i = 0; i < nodes.length; i += 1) {
+      try {
+        var parsed = JSON.parse(nodes[i].textContent);
+        ['productId', 'productTitle', 'variantId', 'productHandle'].forEach(function (key) {
+          if (parsed[key]) found[key] = String(parsed[key]);
+        });
+      } catch (error) {
+        /* a damaged config block is ignored */
+      }
+    }
+    return found;
+  }
+
+  var MEDIA_SKIP = 'header, footer, nav, dialog, [role="dialog"], form[action*="/cart/add"], .kw-prodicon, [class*="thumb"], [class*="recommend"], [class*="related"], [class*="complementary"]';
+
+  function productImage() {
+    var form = document.querySelector('form[action*="/cart/add"]');
+    var scope = (form && form.closest('[id^="shopify-section"], section, main')) || document.querySelector('main') || document.body;
+    var pictures = scope.querySelectorAll('img');
+    var best = null;
+    var bestArea = 0;
+    for (var i = 0; i < pictures.length; i += 1) {
+      var picture = pictures[i];
+      if (picture.closest(MEDIA_SKIP)) continue;
+      var box = picture.getBoundingClientRect();
+      if (box.width < 150 || box.height < 150 || getComputedStyle(picture).visibility === 'hidden') continue;
+      if (box.width * box.height > bestArea) {
+        best = picture;
+        bestArea = box.width * box.height;
+      }
+    }
+    return best;
+  }
+
+  function mediaHost(picture) {
+    var box = picture.getBoundingClientRect();
+    var host = null;
+    for (var node = picture.parentElement; node && !/^(MAIN|BODY|SECTION|HTML)$/.test(node.tagName); node = node.parentElement) {
+      var size = node.getBoundingClientRect();
+      if (size.width > box.width * 1.03 + 4 || size.height > box.height * 1.03 + 4) break; // a gallery that also holds the thumbnails is bigger than the image: stop below it
+      var overflow = getComputedStyle(node).overflowX;
+      if (/^(A|BUTTON)$/.test(node.tagName) || node.getAttribute('role') === 'button' || overflow === 'auto' || overflow === 'scroll') continue;
+      host = node;
+    }
+    return host || picture.parentElement;
+  }
+
+  function mountProductIcon() {
+    // kw.productIcon is set by the core script from the saved settings: Display on product page = Icon only or Both.
+    if (!kw.productIcon || config.pageType !== 'product' || config.wishlistOff) return false;
+    var present = document.querySelectorAll('.kw-prodicon');
+    for (var i = 1; i < present.length; i += 1) present[i].remove(); // never more than one, whatever re-rendered
+    if (present.length) return true;
+    var product = productConfig();
+    if (!product.productId || !product.productHandle) return false;
+    var picture = productImage();
+    if (!picture) return false;
+    var host = mediaHost(picture);
+    if (!host) return false;
+    var button = el('button', 'kw-btn kw-btn--product kw-btn--prodicon');
+    button.type = 'button';
+    button.setAttribute('data-kw-button', '');
+    button.setAttribute('data-kw-product-id', product.productId);
+    button.setAttribute('data-kw-handle', product.productHandle);
+    button.setAttribute('data-kw-title', product.productTitle || product.productHandle);
+    if (product.variantId) button.setAttribute('data-kw-variant-id', product.variantId);
+    button.setAttribute('aria-pressed', 'false');
+    var heart = el('span', 'kw-heart');
+    heart.setAttribute('aria-hidden', 'true');
+    var label = el('span', 'kw-btn__label', config.text.add || 'Add to wishlist');
+    label.setAttribute('data-kw-label', '');
+    button.appendChild(heart);
+    button.appendChild(label);
+    var wrap = el('div', 'kw-prodicon');
+    wrap.appendChild(button);
+    kw.injectHearts(wrap);
+    if (getComputedStyle(host).position === 'static') host.classList.add('kw-media-host');
+    host.appendChild(wrap);
+    kw.render();
+    return true;
+  }
+  kw.mountProductIcon = mountProductIcon;
+
+  // The theme re-renders its media (a variant change, a section reload, the theme editor) and takes the icon with it, or the
+  // image was not laid out yet: look again. Our own changes never trigger work, because the icon is then in the document.
+  function watchProductIcon() {
+    if (!kw.productIcon || config.pageType !== 'product' || kw.iconWatch) return;
+    kw.iconWatch = true;
+    var timer = null;
+    function again() {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(function () {
+        var icon = document.querySelector('.kw-prodicon');
+        if (!icon || !document.body.contains(icon) || document.querySelectorAll('.kw-prodicon').length > 1) mountProductIcon();
+      }, 250);
+    }
+    window.addEventListener('load', again);
+    document.addEventListener('shopify:section:load', again);
+    if (window.MutationObserver) new MutationObserver(again).observe(document.body, { childList: true, subtree: true });
+  }
+
   /* ---------- collection cards ---------- */
 
   var resolveQueue = [];
@@ -1116,7 +1232,7 @@
     row.action.textContent = '';
     var button;
     if (kind === 'in') {
-      button = el('button', 'kw-btn-cart', text('addToCart', 'Add to cart'));
+      button = el('button', 'kw-btn-cart', text('moveToCart', 'Move to cart'));
       button.type = 'button';
       button.addEventListener('click', function () {
         addRowToCart(row, button);
@@ -2318,6 +2434,8 @@
     kw.ready.catch(function () {});
   }
   mountHeaderIcon();
+  mountProductIcon();
+  watchProductIcon();
   scanCards();
   watchVariantChanges();
   kw.render();

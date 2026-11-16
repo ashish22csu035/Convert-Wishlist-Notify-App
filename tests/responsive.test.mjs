@@ -48,7 +48,7 @@ test("every breakpoint is one the stylesheet already used: no competing system",
 
 test("the phone rules live only inside the phone media query", () => {
   assert.ok(phone, "one block holds the phone rules");
-  for (const selector of [".kv-chart-scroll", ".kv-info-panel", ".kv-cal-day", ".kv-toolbar > div:not(.grow)", ".kv-product-title", ".kv-kpis > .has-seg"]) {
+  for (const selector of [".kv-chart-scroll", ".kv-info-panel", ".kv-toolbar > div:not(.grow)", ".kv-product-title", ".kv-kpis > .has-seg"]) {
     assert.ok(phone.body.includes(selector), `${selector} is adjusted for phones`);
   }
   assert.equal(base.includes(".kv-chart-scroll"), false, "the chart wrapper has no desktop style: it adds nothing on a wide screen");
@@ -91,8 +91,8 @@ test("overflow is never hidden to cover a layout problem; the chart scrolls insi
   assert.match(phone.body, /\.kv-chart text \{\s*font-size: 12px;/, "axis labels stay readable at the scaled size");
 });
 
-test("phone controls: calendar days are touch-sized, buttons are touch-sized, long names wrap, the popover stays on screen", () => {
-  assert.match(phone.body, /\.kv-range-apply,\s*\.kv-cal-cancel,\s*\.kv-cal-day,\s*\.kv-cal-nav \{\s*min-height: 40px;/, "Apply, Cancel, calendar days and arrows are touch-sized");
+test("phone controls: the date range fills the row (its Polaris popover sizes itself to the screen), long names wrap, the info popover stays on screen", () => {
+  assert.match(phone.body, /\.kv-range \{\s*flex: 1 1 100%;\s*min-width: 0;/);
   assert.match(phone.body, /\.kv-product-title \{\s*white-space: normal;\s*overflow-wrap: anywhere;/);
   assert.match(phone.body, /\.kv-info-panel \{\s*position: fixed;\s*inset-inline: 12px;/);
   assert.match(phone.body, /\.kv-pager \{\s*flex-wrap: wrap;/);

@@ -19,7 +19,7 @@ const tick = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
 const FULL = {
   version: 1,
   general: { iconType: "star", defaultColor: "#112233", hoverColor: "#445566", activeColor: "#778899", useThemeFonts: false },
-  productPage: { enabled: false, buttonType: "icon", position: "center", buttonStyle: "filled", buttonRadius: 12, widthMode: "manual", manualWidth: 300 },
+  productPage: { enabled: false, displayMode: "both", imagePosition: "bottom-left", buttonType: "icon", position: "center", buttonStyle: "filled", buttonRadius: 12, widthMode: "manual", manualWidth: 300 },
   collectionPage: { enabled: false, iconSize: 30, backgroundOpacity: 0, position: "bottom-right", countDisplay: "none" },
   wishlistPage: { layout: "grid", headerIcon: false },
 };
@@ -27,6 +27,8 @@ const FULL_ATTRIBUTES = {
   "data-kw-general-icon-type": "star",
   "data-kw-general-use-theme-fonts": "false",
   "data-kw-product-page-enabled": "false",
+  "data-kw-product-page-display-mode": "both",
+  "data-kw-product-page-image-position": "bottom-left",
   "data-kw-product-page-button-type": "icon",
   "data-kw-product-page-position": "center",
   "data-kw-product-page-button-style": "filled",
@@ -297,7 +299,7 @@ test("styles: with no setting present the original look is what the stylesheet f
   assert.ok(has(card, "box-shadow", "0 1px 4px rgba(0, 0, 0, 0.25)"));
   assert.ok(has(decl(".kw-btn--card .kw-heart"), "width", "calc(var(--kw-collection-page-icon-size, 22) * 1px)"), "22px icon");
   const product = decl(".kw-btn--product");
-  assert.ok(has(product, "width", "100%") && has(product, "border-radius", "var(--buttons-radius, 4px)") && has(product, "background", "transparent") && has(product, "border", "1px solid currentColor"), "full width outline button that follows the theme radius");
+  assert.ok(has(product, "width", "var(--kw-theme-width, 100%)") && has(product, "border-radius", "min(var(--kw-theme-radius, var(--buttons-radius, 4px)), calc(max(44px, var(--kw-theme-height, 44px)) / 2))") && has(product, "background", "transparent") && has(product, "border", "1px solid currentColor"), "full width outline button that follows the theme radius");
   assert.ok(has(decl(".kw-i-star"), "display", "none") && decl(".kw-i-star") !== null && rules.some((r) => r.selectors.includes(".kw-i-bookmark") && has(r.body, "display", "none")), "only the heart shows by default");
   assert.equal(decl(".kw-table", null) !== null && has(decl(".kw-table"), "min-width", "780px"), true, "the table is still the default layout");
 });

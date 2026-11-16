@@ -22,13 +22,13 @@ function CustomersInfo() {
     <InfoPopover label="About these figures">
       <ul>
         <li>
-          <strong>Saved items</strong> and <strong>Active Notify Me</strong> are current totals, right now.
+          <strong>Saved items</strong> and <strong>Active Notify Me</strong>: current totals.
         </li>
         <li>
-          <strong>Activity</strong> counts Wishlist and Notify Me events inside the selected date range, in UTC.
+          <strong>Activity</strong>: Wishlist and Notify Me actions.
         </li>
-        <li>A customer can have activity even if they currently have no saved items.</li>
-        <li>Customers are shown by a partly hidden email address (for example a*****@gmail.com) when Shopify provides one, otherwise by Shopify customer ID. Names are not shown, and the full address is never displayed.</li>
+        <li>Customers may have activity even when they have no saved items now.</li>
+        <li>Emails are partly hidden. If no email is available, the Shopify customer ID is shown.</li>
       </ul>
     </InfoPopover>
   );

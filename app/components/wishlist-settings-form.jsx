@@ -1,5 +1,6 @@
 /* eslint-disable react/prop-types -- plain JavaScript project: shared helper components are not given PropTypes */
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useBlocker, useFetcher, useLocation, useNavigate } from "react-router";
 import { withEmbeddedParams } from "../utils/embedded-url";
 import { OPTION_LABELS, SPEC, isAppearanceDirty, sectionDefaults, validateAppearance } from "../utils/wishlist-appearance-shared";
@@ -76,7 +77,10 @@ function ThemeEditorNotice({ shop, apiKey }) {
   );
 }
 
-export function WishlistSettingsForm({ appearance, shop, apiKey }) {
+// `modal` ({ host, onClose, onSaved, onDirtyChange }) is passed when the same form is shown in the Dashboard's dialog instead
+// of on its own page: no page chrome, no save bar (the dialog's own Save / Cancel are used), the save still goes to this
+// route's action, and `onSaved` fires only after the server confirmed the write.
+export function WishlistSettingsForm({ appearance, shop, apiKey, modal }) {
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const { search } = useLocation(); // the Admin context (embedded, host, shop) travels with the navigation
@@ -95,20 +99,24 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
   useEffect(() => {
     if (!fetcher.data) return;
     setNotice(fetcher.data);
-    if (fetcher.data.ok) setSaved(fetcher.data.appearance);
+    if (fetcher.data.ok) {
+      setSaved(fetcher.data.appearance);
+      modal?.onSaved?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per server answer
   }, [fetcher.data]);
 
   // Leaving with unsaved changes: ask first, inside the app and when the tab is closed.
-  const blocker = useBlocker(dirty && !saving);
+  const blocker = useBlocker(dirty && !saving && !modal);
   useEffect(() => {
-    if (!dirty) return undefined;
+    if (!dirty || modal) return undefined;
     const warn = (event) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  }, [dirty, modal]);
 
   const set = (section, key) => (value) => setValues((current) => ({ ...current, [section]: { ...current[section], [key]: value } }));
   const err = (section, key) => errors[`${section}.${key}`];
@@ -117,7 +125,7 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
     if (saving || invalid) return; // no duplicate or invalid submissions
     const data = new FormData();
     data.set("appearance", JSON.stringify(values));
-    fetcher.submit(data, { method: "POST" });
+    fetcher.submit(data, modal ? { method: "POST", action: "/app/wishlist-settings" } : { method: "POST" });
   };
   const discard = () => {
     setValues(saved);
@@ -156,41 +164,62 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
       <>
         <WcSwitch
           label="Show the Wishlist button on product pages"
-          details="This can hide the button but cannot add it: the Wishlist button block must be on your product page in the theme editor."
+          details="This can hide the button and the icon but cannot add them: the button needs the Wishlist button block on your product page in the theme editor, the icon needs the Wishlist embed to be on."
           checked={p.enabled}
           onChecked={set("productPage", "enabled")}
         />
-        <WcSelect label="Button content" value={p.buttonType} options={OPTION_LABELS.buttonType} onValue={set("productPage", "buttonType")} />
-        <WcSelect label="Button style" value={p.buttonStyle} options={OPTION_LABELS.buttonStyle} onValue={set("productPage", "buttonStyle")} />
-        <NumberControl
-          label="Corner radius (px)"
-          value={p.buttonRadius}
-          onValue={set("productPage", "buttonRadius")}
-          error={err("productPage", "buttonRadius")}
-          min={SPEC.productPage.buttonRadius.min}
-          max={SPEC.productPage.buttonRadius.max}
-          placeholder="Theme default"
-          nullable
-          details="Empty: the button follows your theme’s button radius."
+        <WcSelect
+          label="Display on product page"
+          value={p.displayMode}
+          options={OPTION_LABELS.displayMode}
+          onValue={set("productPage", "displayMode")}
+          details="Button only is the Wishlist button block from the theme editor. Icon only and Both also show a Wishlist icon over the product image, added by the Wishlist embed (no block needed)."
         />
-        <WcSelect label="Width" value={p.widthMode} options={OPTION_LABELS.widthMode} onValue={set("productPage", "widthMode")} />
-        {p.widthMode === "manual" ? (
-          <NumberControl
-            label="Fixed width (px)"
-            value={p.manualWidth}
-            onValue={set("productPage", "manualWidth")}
-            error={err("productPage", "manualWidth")}
-            min={SPEC.productPage.manualWidth.min}
-            max={SPEC.productPage.manualWidth.max}
+        {p.displayMode !== "button" ? (
+          <WcSelect
+            label="Position on the product image"
+            value={p.imagePosition}
+            options={OPTION_LABELS.collectionPosition}
+            onValue={set("productPage", "imagePosition")}
+            details="The icon uses the icon chosen in General settings."
           />
         ) : null}
-        <WcSelect
-          label="Alignment in its block"
-          value={p.position}
-          options={OPTION_LABELS.productPosition}
-          onValue={set("productPage", "position")}
-          details="Only visible when the width is not full. Where the block sits on the page (for example under Add to cart) is set by where you place it in the theme editor."
-        />
+        {p.displayMode !== "icon" ? (
+          <>
+          <WcSelect label="Button content" value={p.buttonType} options={OPTION_LABELS.buttonType} onValue={set("productPage", "buttonType")} />
+          <WcSelect label="Button style" value={p.buttonStyle} options={OPTION_LABELS.buttonStyle} onValue={set("productPage", "buttonStyle")} />
+          <NumberControl
+            label="Corner radius (px)"
+            value={p.buttonRadius}
+            onValue={set("productPage", "buttonRadius")}
+            error={err("productPage", "buttonRadius")}
+            min={SPEC.productPage.buttonRadius.min}
+            max={SPEC.productPage.buttonRadius.max}
+            placeholder="Theme default"
+            nullable
+            details="Empty: the button follows your theme’s button radius."
+          />
+          <WcSelect label="Width" value={p.widthMode} options={OPTION_LABELS.widthMode} onValue={set("productPage", "widthMode")} />
+          {p.widthMode === "manual" ? (
+            <NumberControl
+              label="Fixed width (px)"
+              value={p.manualWidth}
+              onValue={set("productPage", "manualWidth")}
+              error={err("productPage", "manualWidth")}
+              min={SPEC.productPage.manualWidth.min}
+              max={SPEC.productPage.manualWidth.max}
+            />
+          ) : null}
+          <WcSelect
+            label="Alignment in its block"
+            value={p.position}
+            options={OPTION_LABELS.productPosition}
+            onValue={set("productPage", "position")}
+            details="Only visible when the width is not full. Where the block sits on the page (for example under Add to cart) is set by where you place it in the theme editor."
+          />
+
+          </>
+        ) : null}
       </>
     ),
     collectionPage: (
@@ -244,20 +273,12 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
 
   const current = TABS.find((item) => item.key === tab);
 
-  return (
-    <Page
-      title="Wishlist Settings"
-      back={{ href: "/app/settings", label: "Settings", onNavigate: backToSettings }}
-      subtitle="Choose how the Wishlist looks and behaves on your storefront."
-      actions={
-        <>
-          <s-button href="/app/settings" onClick={backToSettings}>
-            Back to Settings
-          </s-button>
-        </>
-      }
-    >
-      <NativeSaveBar id="wishlist-settings-save-bar" open={dirty} saving={saving} canSave={!invalid} onSave={save} onDiscard={discard} />
+  useEffect(() => {
+    modal?.onDirtyChange?.(dirty);
+  }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps -- only the dirty flag is reported
+
+  const content = (
+    <>
       {blocker.state === "blocked" ? (
         <s-banner tone="warning" heading="You have unsaved changes">
           Leaving this page will discard them.
@@ -304,6 +325,45 @@ export function WishlistSettingsForm({ appearance, shop, apiKey }) {
           <AppearancePreview tab={tab} values={values} viewport={viewports[tab]} onViewport={(next) => setViewports((current) => ({ ...current, [tab]: next }))} />
         </PreviewBoundary>
       </div>
+    </>
+  );
+
+  if (modal) {
+    return (
+      <>
+        {content}
+        {modal.host
+          ? createPortal(
+              <>
+                <s-button slot="primary-action" variant="primary" onClick={save} {...(!dirty || invalid || saving ? { disabled: true } : {})} {...(saving ? { loading: true } : {})}>
+                  Save
+                </s-button>
+                <s-button slot="secondary-actions" onClick={modal.onClose} {...(saving ? { disabled: true } : {})}>
+                  Cancel
+                </s-button>
+              </>,
+              modal.host,
+            )
+          : null}
+      </>
+    );
+  }
+
+  return (
+    <Page
+      title="Wishlist Settings"
+      back={{ href: "/app/settings", label: "Settings", onNavigate: backToSettings }}
+      subtitle="Choose how the Wishlist looks and behaves on your storefront."
+      actions={
+        <>
+          <s-button href="/app/settings" onClick={backToSettings}>
+            Back to Settings
+          </s-button>
+        </>
+      }
+    >
+      <NativeSaveBar id="wishlist-settings-save-bar" open={dirty} saving={saving} canSave={!invalid} onSave={save} onDiscard={discard} />
+      {content}
     </Page>
   );
 }

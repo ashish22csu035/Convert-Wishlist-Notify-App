@@ -151,7 +151,7 @@ test("four tabs share one screen; General is first; each tab shows its own contr
 
   await goTab("Product page");
   assert.deepEqual(selectedTab(), ["Product page"]);
-  assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch")].map((e) => e.getAttribute("label")), ["Show the Wishlist button on product pages", "Button content", "Button style", "Corner radius (px)", "Width", "Alignment in its block"]);
+  assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch")].map((e) => e.getAttribute("label")), ["Show the Wishlist button on product pages", "Display on product page", "Button content", "Button style", "Corner radius (px)", "Width", "Alignment in its block"]);
 
   await goTab("Collection page");
   assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch")].map((e) => e.getAttribute("label")), ["Show hearts on product cards", "Icon size (px)", "Background opacity (%)", "Position on the product image", "Wishlist count"]);
@@ -192,7 +192,7 @@ test("the screen says what only the theme editor can do, with links into it", as
   ]);
   assert.ok([...container.querySelectorAll("s-banner s-link")].every((a) => a.getAttribute("target") === "_blank"));
   await goTab("Product page");
-  assert.match(toggle("Show the Wishlist button on product pages").getAttribute("details"), /can hide the button but cannot add it/);
+  assert.match(toggle("Show the Wishlist button on product pages").getAttribute("details"), /can hide the button and the icon but cannot add them/);
   await goTab("Collection page");
   assert.match(toggle("Show hearts on product cards").getAttribute("details"), /can hide them but cannot add them/);
   await unmount();
@@ -1094,4 +1094,52 @@ test("no module of the Wishlist Settings route is imported from a path under /ex
   const config = fs.readFileSync("vite.config.js", "utf8");
   assert.match(config, /konvert-wishlist\.css/);
   assert.match(config, /plugins: \[storefrontCss\(\)/);
+});
+
+test("Product page > Display on product page: three modes, the image position only when an icon is shown, the button settings only when a button is", async () => {
+  const { element } = formApp();
+  await mount(element);
+  await goTab("Product page");
+  const labels = () => [...container.querySelectorAll("s-select, s-number-field, s-switch")].map((e) => e.getAttribute("label"));
+  const options = (label) => [...select(label).querySelectorAll("s-option")].map((o) => [o.getAttribute("value"), o.textContent]);
+  assert.deepEqual(options("Display on product page"), [["button", "Button only"], ["icon", "Icon only"], ["both", "Both icon and button"]]);
+  assert.equal(select("Display on product page").getAttribute("value"), "button", "existing merchants keep the button");
+  assert.equal(labels().includes("Wishlist icon style"), false, "there is no icon style setting on this tab");
+  assert.equal(labels().includes("Position on the product image"), false, "no position for Button only");
+  assert.equal(labels().includes("Button style"), true);
+  assert.equal(pattr("data-kw-product-page-display-mode"), null, "the default sets nothing on the preview");
+
+  await choose("Display on product page", "icon");
+  assert.equal(pattr("data-kw-product-page-display-mode"), "icon", "the preview follows at once");
+  const corners = [["top-right", "Top right"], ["top-left", "Top left"], ["bottom-left", "Bottom left"], ["bottom-right", "Bottom right"]];
+  assert.deepEqual(options("Position on the product image"), corners);
+  assert.equal(select("Position on the product image").getAttribute("value"), "top-right", "the existing default");
+  assert.equal(labels().includes("Wishlist icon style"), false);
+  assert.equal(labels().includes("Button style"), false, "button settings are not applicable to Icon only");
+  assert.equal(labels().includes("Width"), false);
+  for (const [corner] of corners.slice(1)) {
+    await choose("Position on the product image", corner);
+    assert.equal(pattr("data-kw-product-page-image-position"), corner, corner);
+    assert.equal(pattr("data-kw-collection-page-position"), null, "the collection page position is not touched");
+  }
+  await choose("Position on the product image", "top-right");
+  assert.equal(pattr("data-kw-product-page-image-position"), null, "the default sets nothing");
+
+  await choose("Display on product page", "both");
+  assert.equal(pattr("data-kw-product-page-display-mode"), "both");
+  assert.equal(labels().includes("Position on the product image") && labels().includes("Button style") && labels().includes("Width"), true, "Both shows the position and every button setting");
+
+  // independent of the Collection page's own position
+  await choose("Position on the product image", "bottom-left");
+  await goTab("Collection page");
+  assert.equal(select("Position on the product image").getAttribute("value"), "top-right", "the collection page keeps its own value");
+  await choose("Position on the product image", "bottom-right");
+  assert.equal(pattr("data-kw-collection-page-position"), "bottom-right");
+  assert.equal(pattr("data-kw-product-page-image-position"), "bottom-left", "and the product page keeps its own");
+
+  await goTab("Product page");
+  await choose("Display on product page", "button");
+  assert.equal(labels().includes("Position on the product image"), false);
+  assert.equal(pattr("data-kw-product-page-display-mode"), null);
+  await unmount();
 });

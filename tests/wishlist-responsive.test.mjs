@@ -69,8 +69,8 @@ test("collection hearts are circles sized by the setting, keep a 44px tap area, 
 
 test("the product-page button fits the content width and keeps a 44px height", () => {
   const button = decl(".kw-btn--product");
-  assert.ok(has(button, "width", "100%") && has(button, "max-width", "100%") && has(button, "box-sizing", "border-box"));
-  assert.ok(has(button, "min-height", "44px"));
+  assert.ok(has(button, "width", "var(--kw-theme-width, 100%)") && has(button, "max-width", "100%") && has(button, "box-sizing", "border-box"));
+  assert.ok(has(button, "min-height", "max(44px, var(--kw-theme-height, 44px))"), "the theme's button height, never below a 44px touch target");
   assert.ok(has(button, "align-items", "center") && has(button, "justify-content", "center"));
   const block = decl(".kw-block");
   assert.ok(has(block, "max-width", "100%") && has(block, "box-sizing", "border-box"));

@@ -70,9 +70,9 @@ export function detectThemeSetup(extensions) {
 }
 
 export const SETUP_STEPS = [
-  { key: "configure", title: "Configure your Wishlist", description: "Customize your Wishlist appearance and settings for your storefront.", action: "Configure Wishlist" },
-  { key: "embed", title: "Activate the app in your theme", description: "Enable the Konvert app embed in your Shopify theme so Wishlist and Notify Me features can appear on your storefront.", action: "Activate app embed" },
-  { key: "product", title: "Add the Wishlist block to the product page", description: "Add the Wishlist button block to your product template so customers can save products.", action: "Set up product page" },
+  { key: "configure", title: "Design your Wishlist", description: "Customize the look and feel of your Wishlist page.", action: "Design Your Wishlist in Wishlist Settings", doneAction: "Design Your Wishlist in Wishlist Settings" },
+  { key: "embed", title: "Activate your app in your theme", description: "Enable the Konvert app embed in your Shopify theme.", action: "Activate app embed", doneAction: "Activated" },
+  { key: "product", title: "Add the Wishlist block to the product page", description: "Add the Wishlist button block to your product template.", action: "Set up product page", doneAction: "Activated" },
 ];
 
 // The checklist as shown: each step with its real status, and the count taken from those statuses.

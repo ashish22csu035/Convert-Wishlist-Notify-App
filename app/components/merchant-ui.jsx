@@ -4,18 +4,17 @@ import { Link, isRouteErrorResponse, useNavigate, useRouteError, useSearchParams
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { PAGE_SIZE, RANGE_DAYS } from "../utils/dashboard-constants";
 import { formatNumber } from "../utils/format";
-import { describePeriod } from "../utils/period";
-import { RangeCalendar } from "./range-calendar";
-import { WcField, WcSelect } from "./wc-fields";
+import { customPeriod, describePeriod } from "../utils/period";
+import { WcField, WcSelect, flags, useNativeEvent } from "./wc-fields";
+import { formatSelection, monthOf, todayIso } from "../utils/calendar";
 import "../styles/merchant.css";
 
 export { ToggleKpiCard } from "./toggle-kpi-card";
-export { popoverPosition } from "./range-calendar";
 
 // Shared building blocks for the six merchant screens. Layout, cards and charts are styled in
 // app/styles/merchant.css; controls (selects, buttons, badges, tables, banners) are Polaris web components.
 
-export { ATTRIBUTION_FOOTNOTE, STATUS_HELP, WISHLIST_ITEM_MODES, attributionView, deliveryReason, formatDate, formatUpdatedAt, formatMoney, formatNumber, timeAgo, wishlistItemsView } from "../utils/format";
+export { REVENUE_TIPS, STATUS_HELP, WISHLIST_ITEM_MODES, attributionView, deliveryReason, formatDate, formatUpdatedAt, formatMoney, formatNumber, timeAgo, wishlistItemsView } from "../utils/format";
 
 // ---------- Query-string driven controls ----------
 
@@ -53,56 +52,121 @@ export function ParamSelect({ label, param, value, options, reset = ["page"] }) 
 
 export const RANGE_OPTIONS = RANGE_DAYS.map((days) => [days, `Last ${days} days`]);
 
-// The date-range control on every page: the presets plus "Custom range" (two UTC days, both included). A preset applies
-// at once. Custom range opens the shared floating calendar (range-calendar.jsx) anchored to this control; its Apply is
-// checked with the rules the server uses (utils/period.js), and the server checks again, so a hand-edited URL cannot get
-// past it. The applied range is always written in words under the control.
+// The date-range control on every page (the Page header renders it): the presets plus "Custom range" (two UTC days, both
+// included). It is one Polaris button that shows the range on screen and opens ONE Polaris popover (<s-popover>). The
+// popover lists the presets (a preset applies at once and closes it); "Custom range" swaps the same popover's content for
+// a range <s-date-picker> with Cancel and Apply, so choosing it never needs a second click or a second overlay. The trigger
+// is a real, visible button the merchant presses: a popover opened from a select's change event (the first version) did not
+// open at all once the change came from a real keyboard or mouse choice.
+// The picked days are a draft until Apply: Cancel, Escape and a click outside throw them away. Apply is enabled only for a
+// range the server accepts (the same rules, utils/period.js customPeriod) and the server checks again, so a hand-edited URL
+// cannot get past it.
+const POPOVER_ID = "kv-range-popover";
+const rangeValue = (from, to) => (from && to ? `${from}--${to}` : "");
+const splitValue = (value) => {
+  const [start = "", end = ""] = String(value ?? "").split("--");
+  return { start: start || null, end: end || null };
+};
+
 export function DateRange({ period }) {
   const navigate = useNavigate();
   const url = useUrl();
   const custom = period.kind === "custom";
-  const anchor = useRef(null);
-  const [open, setOpen] = useState(Boolean(period.error));
+  const popover = useRef(null);
+  const picker = useRef(null);
+  const [mode, setMode] = useState("presets"); // what the popover shows: the list, or the date picker
+  const [draft, setDraft] = useState(rangeValue(period.from, period.to));
+  const label = custom ? describePeriod(period).label : `Last ${period.days} days`;
 
-  const choose = (chosen) => {
-    if (chosen === "applied") {
-      setOpen(false); // the range already on screen: just put the select back on it
-      return;
+  const { start, end } = splitValue(draft);
+  const checked = start && end ? customPeriod(start, end) : null;
+  const valid = Boolean(checked?.period);
+
+  // The picker starts from what is applied (or empty), never from an earlier unconfirmed pick.
+  const preparePicker = () => {
+    const element = picker.current;
+    const initial = rangeValue(period.from, period.to);
+    if (element) {
+      element.allow = `2000-01-01--${todayIso()}`; // past days and today only, like the server
+      element.value = initial;
+      element.view = monthOf(period.to ?? period.from ?? todayIso());
     }
-    if (chosen === "custom") {
-      setOpen(true);
-      return;
-    }
-    setOpen(false);
-    if (!custom && chosen === String(period.days)) return; // a repeat of the current choice does nothing
-    navigate(url({ days: chosen, range: null, from: null, to: null, page: null }));
+    setDraft(initial);
   };
-  const applied = custom ? { from: period.from, to: period.to } : null;
-  // A select only reports a CHANGE. Once a custom range is applied the select would already be on "Custom range", and
-  // choosing it again would say nothing, so the calendar could never be reopened. The range on screen therefore has its
-  // own option ("applied", labelled with the dates) and "Custom range" always stays a different choice from it.
-  const options = [...RANGE_OPTIONS, ...(custom ? [["applied", describePeriod(period).label]] : []), ["custom", "Custom range"]];
-  const selected = open ? "custom" : custom ? "applied" : period.days;
+  useEffect(() => {
+    if (mode === "custom") preparePicker();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per switch to the picker
+  }, [mode]);
+  const onPick = () => setDraft(picker.current?.value ?? "");
+  useNativeEvent(picker, "input", onPick);
+  useNativeEvent(picker, "change", onPick);
+  useNativeEvent(popover, "afterhide", () => setMode("presets")); // closed any way (Cancel, Escape, outside click): next time starts at the list
+
+  const choosePreset = (days) => {
+    if (!custom && days === period.days) return; // a repeat of the current choice does nothing
+    navigate(url({ days, range: null, from: null, to: null, page: null }));
+  };
 
   return (
     <>
-      <div className="kv-range" ref={anchor}>
-        <WcSelect label="Date range" labelAccessibilityVisibility="exclusive" value={selected} options={options} onValue={choose} />
+      <div className="kv-range">
+        <s-button commandFor={POPOVER_ID} icon="calendar" accessibilityLabel={`Date range: ${label}. Change`}>
+          {label}
+        </s-button>
       </div>
-      {open ? (
-        <RangeCalendar
-          key={applied ? `${applied.from}_${applied.to}` : "new"}
-          anchorRef={anchor}
-          initial={applied}
-          notice={period.error ?? null}
-          onCancel={() => setOpen(false)}
-          onApply={({ from, to }) => {
-            setOpen(false);
-            navigate(url({ range: "custom", from, to, days: null, page: null }));
-          }}
-        />
+      <s-popover ref={popover} id={POPOVER_ID} inlineSize={mode === "custom" ? "340px" : "220px"} maxInlineSize="calc(100vw - 24px)">
+        <s-box padding="base">
+          {/* Both panels stay in the page and one is hidden: removing the button that was just pressed makes the browser treat
+              the click as an outside click and close the popover. */}
+          <div hidden={mode !== "presets"}>
+            <s-stack gap="small-200">
+              {RANGE_OPTIONS.map(([days, text]) => (
+                <s-button key={days} variant="tertiary" inlineSize="fill" commandFor={POPOVER_ID} command="--hide" {...(!custom && days === period.days ? { icon: "check" } : {})} onClick={() => choosePreset(days)}>
+                  {text}
+                </s-button>
+              ))}
+              <s-button variant="tertiary" inlineSize="fill" {...(custom ? { icon: "check" } : {})} onClick={() => setMode("custom")}>
+                Custom range
+              </s-button>
+            </s-stack>
+          </div>
+          <div hidden={mode !== "custom"}>
+            <s-stack gap="base">
+              <s-text type="strong" aria-live="polite">
+                {formatSelection({ start, end })}
+              </s-text>
+              <s-date-picker ref={picker} type="range" accessibilityLabel="Custom date range" />
+              {checked?.error ? (
+                <s-text tone="critical" role="alert">
+                  {checked.error}
+                </s-text>
+              ) : null}
+              <s-stack direction="inline" gap="small" justifyContent="end">
+                <s-button commandFor={POPOVER_ID} command="--hide">
+                  Cancel
+                </s-button>
+                <s-button
+                  variant="primary"
+                  commandFor={POPOVER_ID}
+                  command="--hide"
+                  {...flags({ disabled: !valid })}
+                  onClick={() => {
+                    if (!valid) return;
+                    navigate(url({ range: "custom", from: checked.period.from, to: checked.period.to, days: null, page: null }));
+                  }}
+                >
+                  Apply
+                </s-button>
+              </s-stack>
+            </s-stack>
+          </div>
+        </s-box>
+      </s-popover>
+      {period.error && !custom ? (
+        <p className="kv-range-error" role="alert">
+          {period.error} Choose Custom range to pick the dates again.
+        </p>
       ) : null}
-      {custom && !open ? <p className="kv-range-note">Showing {describePeriod(period).label}</p> : null}
     </>
   );
 }
@@ -266,12 +330,15 @@ export function KpiCard({ label, value, display, icon, tone = "violet", note, hi
 export function Hint({ label, text }) {
   if (!text) return null;
   const id = `hint-${String(label).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  // A newline in the text starts a new line in the tooltip; the accessible name reads it as one sentence run.
+  const lines = String(text).split(/\r?\n/);
+  const flat = lines.join(" ");
   return (
     <>
-      <button type="button" className="kv-hint" aria-label={`About ${label}: ${text}`} title={text}>
+      <button type="button" className="kv-hint" aria-label={`About ${label}: ${flat}`} title={text}>
         <s-icon type="info" size="small" interestFor={id} />
       </button>
-      <s-tooltip id={id}>{text}</s-tooltip>
+      <s-tooltip id={id}>{lines.length > 1 ? lines.map((line) => <div key={line}>{line}</div>) : text}</s-tooltip>
     </>
   );
 }
@@ -394,7 +461,9 @@ export function eventInfo(type) {
 
 export function Feed({ items }) {
   return (
-    <ul className="kv-feed">
+    // A list that can scroll must be reachable by keyboard so it can be scrolled without a mouse.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+    <ul className="kv-feed" tabIndex={0} aria-label="Recent activity">
       {items.map((item) => (
         <li key={item.id}>
           <span className={`kv-feed-icon ${item.tone}`}>

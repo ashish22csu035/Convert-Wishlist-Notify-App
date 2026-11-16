@@ -299,202 +299,204 @@ test("settings: leaving with unsaved changes asks first; staying keeps the form,
 
 // ======================= date range =======================
 const where = () => document.getElementById("where").textContent;
+const listButton = (name) => [...document.querySelectorAll("s-popover s-button")].find((b) => b.textContent.trim() === name);
+const presetNames = () => [...document.querySelectorAll("s-popover > s-box > div:first-child s-button")].map((b) => b.textContent.trim());
 const rangeOf = (extra = {}) => ({ kind: "preset", days: 30, from: null, to: null, error: null, requested: null, ...extra });
 
-test("date range: the presets are kept, Custom range is added, and choosing a preset applies it at once", async () => {
+test("date range: one Polaris button shows the range and opens a popover with the presets and Custom range; a preset applies at once", async () => {
   await mount(withRouter("/app?days=30&host=abc&page=2", h(UI.DateRange, { period: rangeOf() })));
-  const select = container.querySelector("s-select");
-  assert.deepEqual([...select.querySelectorAll("s-option")].map((o) => o.textContent), ["Last 7 days", "Last 30 days", "Last 90 days", "Custom range"]);
-  assert.equal(document.querySelector(".kv-cal"), null, "no calendar until Custom is chosen");
-  await act(() => { select.value = "90"; fire(select, "change"); });
+  assert.equal(container.querySelector("s-select"), null, "no select: its native option list could not host the calendar");
+  assert.equal(container.querySelector(".kv-range s-button").textContent.trim(), "Last 30 days");
+  assert.deepEqual(presetNames(), ["Last 7 days", "Last 30 days", "Last 90 days", "Custom range"]);
+  assert.equal(listButton("Last 30 days").getAttribute("icon"), "check", "the range on screen is ticked");
+  await click(listButton("Last 90 days"));
   assert.equal(where(), "/app?days=90&host=abc", "the page resets and the embedded-app parameter stays");
   await unmount();
 });
 
-test("date range: an active custom range is selected and named in words; a preset clears it", async () => {
+test("date range: an active custom range is named on the button and ticked on Custom range; a preset clears it", async () => {
   const custom = rangeOf({ kind: "custom", days: 15, from: "2026-10-01", to: "2026-10-15" });
   await mount(withRouter("/app?range=custom&from=2026-10-01&to=2026-10-15&page=2&host=abc", h(UI.DateRange, { period: custom })));
-  assert.equal(container.querySelector("s-select").getAttribute("value"), "applied", "the range on screen is its own option, so Custom range stays a real change");
-  assert.match(container.querySelector(".kv-range-note").textContent, /Showing Oct 1 – Oct 15, 2026 \(UTC\)/);
-  assert.equal(document.querySelector(".kv-cal"), null, "the calendar is closed until asked for");
-  const select = container.querySelector("s-select");
-  await act(() => { select.value = "7"; fire(select, "change"); });
+  assert.match(container.querySelector(".kv-range s-button").textContent, /Oct 1 – Oct 15, 2026 \(UTC\)/);
+  assert.equal(listButton("Custom range").getAttribute("icon"), "check");
+  assert.equal(listButton("Last 7 days").getAttribute("icon"), null);
+  await click(listButton("Last 7 days"));
   assert.equal(where(), "/app?host=abc&days=7", "the custom range, its dates and the page are removed");
   await unmount();
 });
 
-// ---- The shared range calendar: a floating popover portalled to <body> (not inside the page container) ----
-const day = (iso) => document.querySelector(`[data-day="${iso}"]`);
+function Live({ page }) {
+  const { search } = ReactRouter.useLocation();
+  const period = periodView(parsePeriod(new URLSearchParams(search)));
+  return page ? h(UI.Page, { title: page, period }, h("p", null, "body")) : h(UI.DateRange, { period });
+}
+const live = (url, page) => withRouter(url, h(Live, { page }));
+const triggerLabel = () => container.querySelector(".kv-range s-button").textContent.trim();
+const choose = (value) => click(listButton(value === "custom" ? "Custom range" : `Last ${value} days`));
+const params = () => new URLSearchParams(where().split("?")[1] ?? "");
+
+// ---- The shared date-range popover: Polaris <s-popover> + <s-date-picker type="range">. jsdom has no Polaris, so these
+// tests play the parts Polaris plays (the popover's "show" / "afterhide" events, the picker's value and its input event). ----
+const popoverEl = () => document.querySelector("s-popover");
+const pickerEl = () => document.querySelector("s-popover s-date-picker");
+const footerButton = (name) => [...document.querySelectorAll("s-popover s-button")].find((b) => b.textContent.trim() === name);
+const summary = () => popoverEl().querySelector("s-text").textContent;
+const rangeAlert = () => popoverEl().querySelector('[role="alert"]');
+const applyDisabled = () => footerButton("Apply").hasAttribute("disabled");
 const calendarRange = (extra = {}) => h(UI.DateRange, { period: rangeOf(extra) });
+// The merchant presses the trigger (Polaris opens the popover on the list), then presses Custom range: the same popover
+// swaps its list for the date picker.
 const openCalendar = async () => {
-  const select = container.querySelector("s-select");
-  await act(() => { select.value = "custom"; fire(select, "change"); });
+  await click(listButton("Custom range"));
 };
-const buttonNamed = (name) => [...document.querySelectorAll(".kv-cal button")].find((b) => b.textContent === name || b.getAttribute("aria-label") === name);
-const summary = () => document.querySelector('[data-testid="cal-summary"]').textContent;
+const pickRange = (value) => act(() => { pickerEl().value = value; fire(pickerEl(), "input"); }); // "2026-10-02--" is a start with no end yet
+const closePopover = () => act(() => fire(popoverEl(), "afterhide")); // Cancel, Escape or a click outside: Polaris hides it
 
-test("calendar: Custom range opens ONE month with Sunday-first weekdays, month arrows and Apply disabled until a range exists", async () => {
+test("date range: it is Polaris - a select, a popover with a range date picker, Cancel and a primary Apply - and no custom calendar markup", async () => {
   await mount(withRouter("/app?days=30&host=abc", calendarRange()));
-  assert.equal(document.querySelector(".kv-cal"), null, "closed until Custom range is chosen");
+  assert.ok(popoverEl() && pickerEl(), "s-popover holds an s-date-picker");
+  assert.equal(pickerEl().getAttribute("type"), "range");
+  assert.equal(popoverEl().getAttribute("id"), container.querySelector(".kv-range s-button").getAttribute("commandfor"), "the visible trigger button opens this popover");
+  assert.equal(footerButton("Apply").getAttribute("variant"), "primary");
+  assert.equal(footerButton("Cancel").getAttribute("command"), "--hide");
+  assert.equal(document.querySelector(".kv-cal, .kv-cal-grid, .kv-cal-day"), null, "the hand-made calendar is gone");
+  assert.equal(container.querySelectorAll('input[type="date"]').length, 0);
+  await unmount();
+});
+
+test("date range: opening starts empty on a preset, Apply stays disabled until a complete valid range exists, and opening changes nothing", async () => {
+  await mount(withRouter("/app?days=30&host=abc", calendarRange()));
   await openCalendar();
-  assert.equal(document.querySelectorAll(".kv-cal").length, 1, "one calendar, not two side by side");
-  assert.deepEqual([...document.querySelectorAll(".kv-cal-weekday")].map((e) => e.textContent), ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]);
-  assert.ok(buttonNamed("Previous month") && buttonNamed("Next month"));
   assert.equal(summary(), "Select a start date");
-  assert.equal(buttonNamed("Apply").disabled, true);
-  assert.equal(where(), "/app?days=30&host=abc", "opening it changes nothing");
-  await unmount();
-});
-
-test("calendar: pick a start and an end in one month, with the ends and the days between marked, then Apply writes the URL", async () => {
-  await mount(withRouter("/app?days=30&host=abc&page=2", calendarRange({ kind: "custom", days: 18, from: "2026-10-06", to: "2026-10-23" })));
-  const select = container.querySelector("s-select");
-  assert.equal(select.getAttribute("value"), "applied");
-  assert.equal(document.querySelector(".kv-cal"), null, "an applied range shows as a note until the merchant changes it");
-  assert.match(container.querySelector(".kv-range-note").textContent, /Oct 6 – Oct 23, 2026/);
-  await act(() => { select.value = "custom"; fire(select, "change"); });
-  assert.equal(summary(), "Oct 6, 2026 – Oct 23, 2026");
-  assert.equal(document.querySelector('[data-testid="cal-month"]').textContent, "October 2026");
-  assert.deepEqual([day("2026-10-06"), day("2026-10-23")].map((d) => d.classList.contains("edge")), [true, true]);
-  assert.equal(day("2026-10-10").classList.contains("inside"), true);
-  assert.equal(day("2026-10-24").classList.contains("inside"), false);
-  await click(day("2026-10-02")); // a new start
+  assert.equal(applyDisabled(), true);
+  assert.equal(pickerEl().allow, `2000-01-01--${new Date().toISOString().slice(0, 10)}`, "past days and today only, like the server");
+  await pickRange("2026-10-02--");
   assert.equal(summary(), "Oct 2, 2026 – select an end date");
-  assert.equal(buttonNamed("Apply").disabled, true);
-  await click(day("2026-10-12"));
-  assert.equal(summary(), "Oct 2, 2026 – Oct 12, 2026");
-  assert.equal(day("2026-10-07").classList.contains("inside"), true);
-  assert.equal(day("2026-10-20").classList.contains("inside"), false, "the old range is gone");
-  await click(buttonNamed("Apply"));
-  assert.equal(where(), "/app?host=abc&range=custom&from=2026-10-02&to=2026-10-12", "days and page are dropped, the range is added");
+  assert.equal(applyDisabled(), true, "a start without an end is incomplete");
+  assert.equal(where(), "/app?days=30&host=abc", "nothing was applied");
   await unmount();
 });
 
-test("calendar: an end before the start restarts from that day, and a single day is a valid range", async () => {
-  await mount(withRouter("/app?days=30", calendarRange({ kind: "custom", days: 1, from: "2026-10-15", to: "2026-10-15" })));
+test("date range: pick a start and an end, then Apply writes the URL (days and page dropped) and the select shows the range", async () => {
+  await mount(live("/app?days=30&host=abc&page=2"));
   await openCalendar();
-  await click(day("2026-10-20"));
-  await click(day("2026-10-10")); // earlier than the start: restart
-  assert.equal(summary(), "Oct 10, 2026 – select an end date");
-  assert.equal(day("2026-10-20").classList.contains("edge"), false);
-  await click(day("2026-10-10")); // the same day ends it
-  assert.equal(summary(), "Oct 10, 2026 – Oct 10, 2026");
-  await click(buttonNamed("Apply"));
+  await pickRange("2026-10-02--2026-10-12");
+  assert.equal(summary(), "Oct 2, 2026 – Oct 12, 2026");
+  assert.equal(applyDisabled(), false);
+  await click(footerButton("Apply"));
+  assert.equal(where(), "/app?host=abc&range=custom&from=2026-10-02&to=2026-10-12");
+  assert.match(triggerLabel(), /Oct 2 – Oct 12, 2026 \(UTC\)/, "the button names the applied range");
+  await unmount();
+});
+
+test("date range: a single day is a valid range; a start can be corrected before applying", async () => {
+  await mount(live("/app?days=30"));
+  await openCalendar();
+  await pickRange("2026-10-20--");
+  await pickRange("2026-10-10--"); // the picker restarts from an earlier day
+  assert.equal(applyDisabled(), true);
+  await pickRange("2026-10-10--2026-10-10");
+  assert.equal(applyDisabled(), false);
+  await click(footerButton("Apply"));
   assert.equal(where(), "/app?range=custom&from=2026-10-10&to=2026-10-10");
   await unmount();
 });
 
-test("calendar: the selection survives month navigation, so a range can span months", async () => {
-  await mount(withRouter("/app?days=30", calendarRange({ kind: "custom", days: 1, from: "2026-09-20", to: "2026-09-20" })));
+test("date range: an end before the start, a range over 366 days and a future start are refused with a reason, and Apply stays disabled", async () => {
+  await mount(live("/app?days=30"));
   await openCalendar();
-  await click(day("2026-09-25"));
-  await click(buttonNamed("Next month"));
-  assert.equal(document.querySelector('[data-testid="cal-month"]').textContent, "October 2026");
-  assert.equal(summary(), "Sep 25, 2026 – select an end date", "still selected after moving on");
-  await click(day("2026-10-08"));
-  await click(buttonNamed("Previous month"));
-  assert.equal(day("2026-09-25").classList.contains("edge"), true, "the start is still marked when going back");
-  assert.equal(day("2026-09-28").classList.contains("inside"), true);
-  await click(buttonNamed("Next month"));
-  assert.equal(day("2026-10-08").classList.contains("edge"), true);
-  await click(buttonNamed("Apply"));
-  assert.equal(where(), "/app?range=custom&from=2026-09-25&to=2026-10-08");
+  await pickRange("2026-10-12--2026-10-02");
+  assert.match(rangeAlert().textContent, /end date cannot be before the start date/);
+  assert.equal(applyDisabled(), true);
+  await pickRange("2024-01-15--" + new Date().toISOString().slice(0, 10));
+  assert.match(rangeAlert().textContent, /at most 366 days/);
+  assert.equal(applyDisabled(), true);
+  const tomorrow = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+  await pickRange(`${tomorrow}--${tomorrow}`);
+  assert.match(rangeAlert().textContent, /cannot be in the future/);
+  assert.equal(applyDisabled(), true);
+  await click(footerButton("Apply")); // disabled in Polaris; even a stray click applies nothing
+  assert.equal(where(), "/app?days=30");
+  await pickRange("2026-10-01--2026-10-05");
+  assert.equal(rangeAlert(), null);
+  assert.equal(applyDisabled(), false);
   await unmount();
 });
 
-test("calendar: Cancel and Escape close it without applying; reopening starts from the applied range", async () => {
-  await mount(withRouter("/app?range=custom&from=2026-10-06&to=2026-10-23", calendarRange({ kind: "custom", days: 18, from: "2026-10-06", to: "2026-10-23" })));
+test("date range: reopening starts from the applied range; a discarded pick is gone", async () => {
+  await mount(live("/app?range=custom&from=2026-10-06&to=2026-10-23"));
+  const before = where();
   await openCalendar();
-  await click(day("2026-10-01"));
-  await click(buttonNamed("Cancel"));
-  assert.equal(document.querySelector(".kv-cal"), null);
-  assert.equal(where(), "/app?range=custom&from=2026-10-06&to=2026-10-23", "nothing was applied");
+  assert.equal(pickerEl().value, "2026-10-06--2026-10-23");
+  assert.equal(pickerEl().view, "2026-10", "opens on the month of the applied end day");
+  assert.equal(summary(), "Oct 6, 2026 – Oct 23, 2026");
+  await pickRange("2026-10-01--");
+  await closePopover(); // Cancel / Escape / outside click
+  assert.equal([where(), triggerLabel()].join(), [before, "Oct 6 – Oct 23, 2026 (UTC)"].join(), "nothing applied, the button still names the applied range");
+  assert.equal(document.querySelector("s-popover > s-box > div:first-child").hasAttribute("hidden"), false, "closed any way, it reopens on the list");
   await openCalendar();
-  assert.equal(summary(), "Oct 6, 2026 – Oct 23, 2026", "the unconfirmed pick was thrown away");
-  await act(() => document.querySelector(".kv-cal").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  assert.equal(document.querySelector(".kv-cal"), null);
+  assert.equal(pickerEl().value, "2026-10-06--2026-10-23", "the unconfirmed pick was thrown away");
+  assert.equal(summary(), "Oct 6, 2026 – Oct 23, 2026");
   await unmount();
 });
 
-test("calendar: Cancel on a preset returns the select to the preset; future days cannot be picked; a range over 366 days is refused", async () => {
-  await mount(withRouter("/app?days=30", calendarRange()));
+test("date range: Cancel on a preset returns the select to the preset and applies nothing", async () => {
+  await mount(live("/app?days=30&host=abc"));
   await openCalendar();
-  await click(buttonNamed("Cancel"));
-  assert.equal(container.querySelector("s-select").getAttribute("value"), "30");
-  await openCalendar();
-  const tomorrow = new Date(Date.now() + 86400000);
-  const tomorrowIso = tomorrow.toISOString().slice(0, 10);
-  if (tomorrowIso.slice(0, 7) !== new Date().toISOString().slice(0, 7)) await click(buttonNamed("Next month"));
-  assert.equal(day(tomorrowIso).disabled, true, "nothing after today can be chosen");
-  const start = "2024-01-15";
-  const end = new Date().toISOString().slice(0, 10);
-  const monthsBack = (new Date().getUTCFullYear() - 2024) * 12 + new Date().getUTCMonth();
-  if (tomorrowIso.slice(0, 7) !== end.slice(0, 7)) await click(buttonNamed("Previous month"));
-  for (let i = 0; i < monthsBack; i += 1) await click(buttonNamed("Previous month"));
-  await click(day(start));
-  for (let i = 0; i < monthsBack; i += 1) await click(buttonNamed("Next month"));
-  await click(day(end));
-  await click(buttonNamed("Apply"));
-  assert.match(document.querySelector('.kv-cal [role="alert"]').textContent, /at most 366 days/);
-  assert.equal(where(), "/app?days=30", "refused: nothing navigated");
+  assert.equal(document.querySelector("s-popover > s-box > div:last-child").hasAttribute("hidden"), false, "the picker replaced the list in the same popover");
+  await pickRange("2026-10-02--2026-10-04");
+  await closePopover();
+  assert.equal([where(), triggerLabel()].join(), ["/app?days=30&host=abc", "Last 30 days"].join());
   await unmount();
 });
 
-test("calendar: a custom range the server refused is explained inside the open calendar", async () => {
-  await mount(withRouter("/app?range=custom&from=2026-10-09&to=2026-10-01", calendarRange({ error: "The end date cannot be before the start date.", requested: { from: "2026-10-09", to: "2026-10-01" } })));
-  assert.match(document.querySelector('.kv-cal [role="alert"]').textContent, /before the start date/);
+test("date range: custom ranges can be applied again and again, and presets still apply", async () => {
+  await mount(live("/app?days=30&host=abc&page=2"));
+  for (const [from, to] of [["2026-10-06", "2026-10-23"], ["2026-10-01", "2026-10-09"], ["2026-09-15", "2026-09-30"]]) {
+    await openCalendar();
+    await pickRange(`${from}--${to}`);
+    await click(footerButton("Apply"));
+    assert.equal(where(), `/app?host=abc&range=custom&from=${from}&to=${to}`);
+    for (const key of ["range", "from", "to", "host"]) assert.equal(params().getAll(key).length, 1, `${key} appears once`);
+    assert.equal(params().has("days") || params().has("page"), false);
+  }
+  assert.equal(listButton("Custom range").getAttribute("icon"), "check");
+  await choose("7");
+  assert.equal(where(), "/app?host=abc&days=7", "the custom range, its dates and the page are removed");
+  assert.equal(listButton("Custom range").getAttribute("icon"), null, "no tick on Custom range once a preset applies");
+  await choose("90");
+  assert.equal(where(), "/app?host=abc&days=90");
+  await choose("30");
+  assert.equal(where(), "/app?host=abc&days=30");
   await unmount();
 });
 
-test("calendar: it floats - portalled to <body>, fixed, under its selector, and takes no room in the page", async () => {
+test("date range: a custom range the server refused is explained next to the select, and Custom range can pick again", async () => {
+  await mount(live("/app?range=custom&from=2026-10-23&to=2026-10-06"));
+  assert.equal(triggerLabel(), "Last 30 days", "back on the default preset");
+  assert.match(container.querySelector('.kv-range-error[role="alert"]').textContent, /before the start date/);
+  await openCalendar();
+  await pickRange("2026-10-01--2026-10-05");
+  await click(footerButton("Apply"));
+  assert.equal(where(), "/app?range=custom&from=2026-10-01&to=2026-10-05");
+  assert.equal(container.querySelector(".kv-range-error"), null, "the explanation goes once the range is valid");
+  await unmount();
+});
+
+test("date range: the popover takes no room in the page, and every page that has a date range gets the same one", async () => {
   await mount(withRouter("/app?days=30", calendarRange()));
   const before = container.querySelectorAll("*").length;
   await openCalendar();
-  assert.equal(container.querySelectorAll("*").length, before, "no element was added to the page layout");
-  const cal = document.querySelector(".kv-cal");
-  assert.equal(container.contains(cal), false, "it is outside the page container, so no parent overflow can clip it");
-  assert.equal(cal.closest(".kv-pop-root").parentNode, document.body);
-  assert.ok(/left:/.test(cal.getAttribute("style")) && /top:/.test(cal.getAttribute("style")), "it is placed by coordinates");
+  assert.equal(container.querySelectorAll("*").length, before, "opening adds nothing to the page layout");
   await unmount();
-  assert.equal(document.querySelector(".kv-cal"), null, "and it leaves with the page");
-});
-
-test("calendar: a click outside closes it without applying; a click on the calendar or its selector does not", async () => {
-  await mount(withRouter("/app?range=custom&from=2026-10-06&to=2026-10-23", calendarRange({ kind: "custom", days: 18, from: "2026-10-06", to: "2026-10-23" })));
-  await openCalendar();
-  await act(() => day("2026-10-01").dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true })));
-  assert.ok(document.querySelector(".kv-cal"), "inside the calendar: stays open");
-  await act(() => container.querySelector("s-select").dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true })));
-  assert.ok(document.querySelector(".kv-cal"), "on its own selector: stays open");
-  await act(() => document.body.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true })));
-  assert.equal(document.querySelector(".kv-cal"), null);
-  assert.equal(where(), "/app?range=custom&from=2026-10-06&to=2026-10-23", "nothing applied");
-  await unmount();
-});
-
-test("calendar position: below the selector with right edges aligned, kept inside the viewport, above when there is no room below", () => {
-  const size = { width: 320, height: 380 };
-  const viewport = { width: 1200, height: 900 };
-  assert.deepEqual(UI.popoverPosition({ left: 900, right: 1100, top: 100, bottom: 140 }, size, viewport), { left: 780, top: 146 }, "right edges line up");
-  assert.deepEqual(UI.popoverPosition({ left: 8, right: 120, top: 100, bottom: 140 }, size, viewport), { left: 8, top: 146 }, "not past the left edge");
-  assert.equal(UI.popoverPosition({ left: 1000, right: 1250, top: 100, bottom: 140 }, size, viewport).left, 872, "not past the right edge");
-  assert.deepEqual(UI.popoverPosition({ left: 900, right: 1100, top: 700, bottom: 740 }, size, viewport), { left: 780, top: 314 }, "flips above when below would overflow");
-  const phone = UI.popoverPosition({ left: 16, right: 374, top: 200, bottom: 240 }, size, { width: 390, height: 800 });
-  assert.ok(phone.left >= 8 && phone.left + 320 <= 382, "fits a 390px phone");
-});
-
-test("calendar: every page that has a date range gets the shared calendar, and no page has its own date inputs", async () => {
   for (const title of ["Dashboard", "Wishlist", "Notify Me", "Engaged customers", "Analytics"]) {
     await mount(withRouter("/app", h(UI.Page, { title, period: rangeOf() }, h("p", null, "body"))));
-    const select = container.querySelector("s-select");
-    await act(() => { select.value = "custom"; fire(select, "change"); });
-    assert.ok(document.querySelector(".kv-cal"), title);
+    assert.equal(document.querySelectorAll("s-popover s-date-picker").length, 1, title);
     assert.equal(container.querySelectorAll('input[type="date"]').length, 0, title);
     await unmount();
   }
   for (const file of fs.readdirSync("app/routes").filter((f) => f.endsWith(".jsx"))) {
-    const source = fs.readFileSync(`app/routes/${file}`, "utf8");
-    assert.equal(/type="date"|calendarRange/.test(source), false, `${file} has no page-specific date picker`);
+    assert.equal(/type="date"|s-date-picker|calendarRange/.test(fs.readFileSync(`app/routes/${file}`, "utf8")), false, `${file} has no page-specific date picker`);
   }
   for (const file of ["app._index", "app.wishlist", "app.notify-me", "app.customers", "app.analytics"]) assert.match(fs.readFileSync(`app/routes/${file}.jsx`, "utf8"), /<Page [^>]*period=\{period\}/, `${file} uses the shared Page date range`);
 });
@@ -508,130 +510,6 @@ test("KPI cards carry no percentage-change badge or arrow, on any page", async (
   await unmount();
   for (const file of ["app._index", "app.analytics", "app.wishlist", "app.notify-me", "app.customers"]) assert.equal(/delta=|deltaOf/.test(fs.readFileSync(`app/routes/${file}.jsx`, "utf8")), false, file);
   assert.equal(fs.readFileSync("app/styles/merchant.css", "utf8").includes(".kv-delta"), false, "its styles are gone");
-});
-
-// ---- Repeated custom ranges: the page re-reads its range from the URL, like the real routes do ----
-function Live({ page }) {
-  const { search } = ReactRouter.useLocation();
-  const period = periodView(parsePeriod(new URLSearchParams(search)));
-  return page ? h(UI.Page, { title: page, period }, h("p", null, "body")) : h(UI.DateRange, { period });
-}
-const live = (url, page) => withRouter(url, h(Live, { page }));
-const selectEl = () => container.querySelector("s-select");
-const choose = (value) => act(() => { selectEl().value = value; fire(selectEl(), "change"); });
-const params = () => new URLSearchParams(where().split("?")[1] ?? "");
-// The calendar opens on the month of the applied range (or today's); step back until the wanted day is on screen.
-const reveal = async (iso) => {
-  for (let i = 0; i < 36 && !day(iso); i += 1) await click(buttonNamed("Previous month"));
-};
-const applyRange = async (from, to) => {
-  await choose("custom");
-  assert.ok(document.querySelector(".kv-cal"), "Custom range opens the calendar");
-  await reveal(from);
-  await click(day(from));
-  await reveal(to);
-  await click(day(to));
-  await click(buttonNamed("Apply"));
-};
-
-test("custom range can be applied again and again: each time Custom range opens the calendar on the range on screen", async () => {
-  await mount(live("/app?days=30&host=abc&page=2"));
-  await applyRange("2026-10-06", "2026-10-23");
-  assert.equal(where(), "/app?host=abc&range=custom&from=2026-10-06&to=2026-10-23");
-  assert.equal(selectEl().getAttribute("value"), "applied");
-  assert.deepEqual([...selectEl().querySelectorAll("s-option")].map((o) => o.getAttribute("value")), ["7", "30", "90", "applied", "custom"]);
-  assert.match(selectEl().querySelector('s-option[value="applied"]').textContent, /Oct 6 – Oct 23, 2026/);
-  assert.equal(document.querySelector(".kv-cal"), null, "closed after Apply");
-
-  await choose("custom"); // the second time: this used to do nothing
-  assert.equal(document.querySelector('[data-testid="cal-summary"]').textContent, "Oct 6, 2026 – Oct 23, 2026", "starts from the applied range");
-  assert.equal(day("2026-10-06").classList.contains("edge") && day("2026-10-23").classList.contains("edge"), true);
-  await click(day("2026-10-01")); // both ends change
-  await click(day("2026-10-09"));
-  await click(buttonNamed("Apply"));
-  assert.equal(where(), "/app?host=abc&range=custom&from=2026-10-01&to=2026-10-09");
-
-  await applyRange("2026-09-15", "2026-09-30"); // and a third time, in another month
-  assert.equal(where(), "/app?host=abc&range=custom&from=2026-09-15&to=2026-09-30");
-  for (const key of ["range", "from", "to", "host"]) assert.equal(params().getAll(key).length, 1, `${key} appears once`);
-  assert.equal(params().has("days") || params().has("page"), false);
-  await unmount();
-});
-
-test("custom range: Cancel, Escape and an outside click keep the applied range and never apply a half-made one", async () => {
-  await mount(live("/app?range=custom&from=2026-10-06&to=2026-10-23"));
-  const before = where();
-  await choose("custom");
-  await click(day("2026-10-01"));
-  await click(buttonNamed("Cancel"));
-  assert.equal([where(), selectEl().getAttribute("value")].join(), [before, "applied"].join(), "Cancel");
-  await choose("custom");
-  await click(day("2026-10-02"));
-  await click(day("2026-10-04"));
-  await act(() => document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  assert.equal([where(), selectEl().getAttribute("value"), document.querySelector(".kv-cal")].join(), [before, "applied", null].join(), "Escape");
-  await choose("custom");
-  assert.equal(document.querySelector('[data-testid="cal-summary"]').textContent, "Oct 6, 2026 – Oct 23, 2026", "the discarded picks are gone");
-  await click(day("2026-10-12")); // a start with no end yet
-  await act(() => document.body.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true })));
-  assert.equal([where(), selectEl().getAttribute("value"), document.querySelector(".kv-cal")].join(), [before, "applied", null].join(), "outside click");
-  await choose("custom");
-  await choose("applied"); // choosing the range already on screen closes the calendar
-  assert.equal(document.querySelector(".kv-cal"), null);
-  assert.equal(where(), before);
-  await unmount();
-});
-
-test("custom range -> Last 7 days -> Custom range again, and presets still apply", async () => {
-  await mount(live("/app?range=custom&from=2026-10-06&to=2026-10-23&host=abc"));
-  await choose("7");
-  assert.equal(where(), "/app?host=abc&days=7", "the custom range, its dates and the page are removed");
-  assert.equal(selectEl().getAttribute("value"), "7");
-  assert.deepEqual([...selectEl().querySelectorAll("s-option")].map((o) => o.getAttribute("value")), ["7", "30", "90", "custom"], "no applied-range option on a preset");
-  await choose("custom");
-  assert.equal(document.querySelector('[data-testid="cal-summary"]').textContent, "Select a start date", "a preset has no range to start from");
-  await reveal("2026-10-10");
-  await click(day("2026-10-10"));
-  await click(day("2026-10-14"));
-  await click(buttonNamed("Apply"));
-  assert.equal(where(), "/app?host=abc&range=custom&from=2026-10-10&to=2026-10-14");
-  await choose("90");
-  assert.equal(where(), "/app?host=abc&days=90");
-  await choose("30");
-  assert.equal(where(), "/app?host=abc&days=30");
-  await unmount();
-});
-
-test("custom range: the applied range is restored from the URL after a refresh, and can be changed straight away", async () => {
-  await mount(live("/app?range=custom&from=2026-10-06&to=2026-10-23&host=abc"));
-  assert.equal(selectEl().getAttribute("value"), "applied");
-  assert.match(container.querySelector(".kv-range-note").textContent, /Showing Oct 6 – Oct 23, 2026 \(UTC\)/);
-  await choose("custom");
-  assert.equal(document.querySelector('[data-testid="cal-summary"]').textContent, "Oct 6, 2026 – Oct 23, 2026");
-  await click(buttonNamed("Cancel"));
-  await unmount();
-  // a bad range in the URL falls back to Last 30 days and says why
-  await mount(live("/app?range=custom&from=2026-10-23&to=2026-10-06"));
-  assert.equal(selectEl().getAttribute("value"), "custom", "the calendar is open to explain it");
-  assert.match(document.querySelector('.kv-cal [role="alert"]').textContent, /before the start date/);
-  await unmount();
-});
-
-test("custom range works the same on all five pages: apply, reopen, apply again, Cancel keeps it", async () => {
-  for (const title of ["Dashboard", "Wishlist", "Notify Me", "Engaged customers", "Analytics"]) {
-    await mount(live("/app?days=7&host=abc", title));
-    await applyRange("2026-10-06", "2026-10-23");
-    assert.equal(where(), "/app?host=abc&range=custom&from=2026-10-06&to=2026-10-23", title);
-    await applyRange("2026-10-02", "2026-10-03");
-    assert.equal(where(), "/app?host=abc&range=custom&from=2026-10-02&to=2026-10-03", `${title}: second range`);
-    await choose("custom");
-    await click(buttonNamed("Cancel"));
-    assert.equal(where(), "/app?host=abc&range=custom&from=2026-10-02&to=2026-10-03", `${title}: cancel keeps it`);
-    assert.equal(selectEl().getAttribute("value"), "applied", title);
-    await unmount();
-  }
-  const routes = ["app._index", "app.wishlist", "app.notify-me", "app.customers", "app.analytics"];
-  for (const file of routes) assert.match(fs.readFileSync(`app/routes/${file}.jsx`, "utf8"), /<Page [^>]*period=\{period\}/, `${file} uses the shared Page date range`);
 });
 
 // ---- Customers in tables ----
@@ -648,7 +526,7 @@ test("CustomerLink shows the masked email as the link to the same Shopify custom
 
 test("the page header shows the date range control only on pages that have one", async () => {
   await mount(withRouter("/app", h(UI.Page, { title: "Dashboard", period: rangeOf() }, h("p", null, "body"))));
-  assert.ok(container.querySelector(".kv-range s-select"));
+  assert.ok(container.querySelector(".kv-range s-button"));
   await mount(withRouter("/app", h(UI.Page, { title: "Settings" }, h("p", null, "body"))));
   assert.equal(container.querySelector(".kv-range"), null);
   await unmount();
@@ -699,7 +577,7 @@ test("Engaged customers: no search any more; the sort stays with its three optio
 test("Engaged customers: the long explanation is in the popover, not under the table, and says what the task requires", async () => {
   const source = fs.readFileSync("app/routes/app.customers.jsx", "utf8");
   assert.match(source, /<InfoPopover label="About these figures">/);
-  for (const needle of ["current totals", "selected date range, in UTC", "even if they currently have no saved items", "Shopify customer ID", "the full address is never displayed"]) {
+  for (const needle of ["current totals", "Wishlist and Notify Me actions", "no saved items now", "Shopify customer ID", "partly hidden"]) {
     assert.ok(source.includes(needle), `the popover says: ${needle}`);
   }
   assert.equal(/<p className="kv-note">“Saved items”/.test(source), false, "the old paragraph under the table is gone");
@@ -721,13 +599,13 @@ test("activity chart: Wishlist activity is shown first; switching shows the Noti
   assert.deepEqual(switchButtons().map((b) => b.getAttribute("aria-pressed")), ["true", "false"]);
   assert.deepEqual(legend(), ["Products added", "Unique users", "Product clicks"]);
   assert.match(container.querySelector("svg").getAttribute("aria-label"), /^Wishlist activity, Oct 1 – Oct 3, 2026 \(UTC\)\. Products added: 6 in total/);
-  assert.match(container.textContent, /Unique users” counts different customers per day/);
+  assert.equal(container.textContent.includes("Daily counts, UTC days"), false, "no explanatory note under the chart");
 
   await click(switchButtons()[1]);
   assert.deepEqual(switchButtons().map((b) => b.getAttribute("aria-pressed")), ["false", "true"]);
   assert.deepEqual(legend(), ["Subscribed", "Unsubscribed", "Restock emails sent"]);
   assert.match(container.querySelector("svg").getAttribute("aria-label"), /^Notify Me activity, Oct 1 – Oct 3, 2026 \(UTC\)\. Subscribed: 3 in total; Unsubscribed: 0 in total; Restock emails sent: 1 in total/);
-  assert.equal(container.textContent.includes("Unique users"), false, "the Wishlist-only note is gone");
+  assert.equal(container.querySelector(".kv-legend")?.textContent.includes("Unique users") ?? false, false, "the Wishlist-only series is gone");
 
   await click(switchButtons()[0]);
   assert.deepEqual(legend(), ["Products added", "Unique users", "Product clicks"]);
@@ -948,4 +826,20 @@ test("Dashboard layout CSS: the two-column row stretches to one height and stack
   assert.match(css, /\.kv-split \{[^}]*grid-template-columns: minmax\(0, 3fr\) minmax\(0, 2fr\);[^}]*align-items: stretch;/s);
   assert.match(css, /@media \(max-width: 900px\) \{\s*\.kv-split \{\s*grid-template-columns: minmax\(0, 1fr\);/);
   assert.equal(/\.kv-(check|progress|optional)/.test(css), false, "no leftover checklist styles");
+});
+
+test("Dashboard Activity row: no summary cards over the chart, equal-height panels, and a Recent activity list that scrolls inside its panel", async () => {
+  const dashboard = fs.readFileSync("app/routes/app._index.jsx", "utf8");
+  const activity = dashboard.slice(dashboard.indexOf("<Split>"), dashboard.indexOf("</Split>"));
+  assert.equal(/KpiCard|ToggleKpiCard|kv-kpi/.test(activity), false, "no metric cards above the chart");
+  assert.match(activity, /to: "\/app\/wishlist\?tab=activity", label: "View Wishlist log"/, "the log link is kept");
+  const css = fs.readFileSync("app/styles/merchant.css", "utf8");
+  assert.match(css, /\.kv-split > \.kv-card \{\s*display: flex;\s*flex-direction: column;/);
+  assert.match(css, /\.kv-feed \{[^}]*max-height: 340px;[^}]*overflow-y: auto;/s);
+  await mount(h(UI.Feed, { items: [{ id: 1, text: "A customer added “A very long product name that has to wrap inside the panel”", label: "Added to Wishlist", time: "just now", icon: "heart", tone: "neutral" }] }));
+  const list = container.querySelector(".kv-feed");
+  assert.equal(list.getAttribute("tabindex"), "0", "a scrolling region can be reached by keyboard");
+  assert.equal(list.getAttribute("aria-label"), "Recent activity");
+  assert.match(container.querySelector(".kv-feed-time").textContent, /Added to Wishlist · just now/);
+  await unmount();
 });

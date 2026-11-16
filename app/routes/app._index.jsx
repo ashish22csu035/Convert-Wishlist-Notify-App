@@ -19,6 +19,7 @@ import {
   NoShopState,
   Page,
   ProductCell,
+  REVENUE_TIPS,
   Split,
   ToggleKpiCard,
   WISHLIST_ITEM_MODES,
@@ -103,16 +104,16 @@ export default function Dashboard() {
           tone="violet"
           options={WISHLIST_ITEM_MODES.map((mode) => ({ ...mode, ...wishlistItemsView(d, mode.key) }))}
           initial="active"
-          hint="Active: items customers have saved right now. All-time: every add ever recorded, including items later removed. Neither depends on the date range."
+          hint={"Active: Items saved right now.\nAll-time: Items ever saved, including removed items."}
         />
-        <KpiCard label="Unique Wishlist users" value={d.wishlistUsers.current} icon="person" tone="violet" note={words.label} hint="Different logged-in customers who saved, removed or opened a Wishlist item in the date range." />
-        <KpiCard label="Total sessions" value={d.sessions.current} icon="chart-line" tone="violet" note={`${words.label} · 30-minute sessions`} hint="Every Wishlist and Notify Me session opened in the date range, including sessions where the customer did nothing else. A session lasts a fixed 30 minutes from its start and counts once, on the day it started. Wishlist and Notify Me are shown separately on Analytics." />
-        <KpiCard label="Active Notify Me subscriptions" value={d.subscriptions.ACTIVE} icon="notification" tone="blue" note={`Current total · ${formatNumber(w.NOTIFY_SUBSCRIBED)} new ${words.within}`} hint="Customers who are right now waiting for a sold-out item to come back. This is a current total, not a count for the date range." />
-        <KpiCard label="Restock emails sent" value={w.RESTOCK_EMAIL_SENT} icon="email" tone="blue" note={`${formatNumber(d.deliveries.FAILED + d.deliveries.UNKNOWN)} failed or unknown · ${formatNumber(d.deliveries.PENDING + d.deliveries.SENDING)} queued (all time)`} hint="Restock emails accepted by the mail server in the date range. Accepted does not confirm the email reached the inbox or was opened." />
+        <KpiCard label="Unique Wishlist users" value={d.wishlistUsers.current} icon="person" tone="violet" note={words.label} hint="Logged-in customers who used Wishlist." />
+        <KpiCard label="Total sessions" value={d.sessions.current} icon="chart-line" tone="violet" note={`${words.label} · 30-minute sessions`} hint="Times customers used Wishlist or Notify Me. Actions close together count once." />
+        <KpiCard label="Active Notify Me subscriptions" value={d.subscriptions.ACTIVE} icon="notification" tone="blue" note={`Current total · ${formatNumber(w.NOTIFY_SUBSCRIBED)} new ${words.within}`} hint="Customers waiting for a sold-out item to return." />
+        <KpiCard label="Restock emails sent" value={w.RESTOCK_EMAIL_SENT} icon="email" tone="blue" note={`${formatNumber(d.deliveries.FAILED + d.deliveries.UNKNOWN)} failed or unknown · ${formatNumber(d.deliveries.PENDING + d.deliveries.SENDING)} queued (all time)`} hint="Emails sent to notify customers about restocks." />
         {revenue.options ? (
-          <ToggleKpiCard label="Attributed revenue" icon="cart" tone="green" options={revenue.options} initial="overall" hint="Eligible Wishlist saves and successful Notify Me restock emails can remain attributable for the customer's lifetime, subject to existing matching and removal rules. The 7-day window applies only to qualifying Add to Cart activity from My Wishlist." />
+          <ToggleKpiCard label="Attributed revenue" icon="cart" tone="green" options={revenue.options} initial="overall" hint={REVENUE_TIPS.overall} />
         ) : (
-          <KpiCard label="Attributed revenue" value={null} display={revenue.setup.display} icon="cart" note={revenue.setup.note} hint="Eligible Wishlist saves and successful Notify Me restock emails can remain attributable for the customer's lifetime, subject to existing matching and removal rules. The 7-day window applies only to qualifying Add to Cart activity from My Wishlist." />
+          <KpiCard label="Attributed revenue" value={null} display={revenue.setup.display} icon="cart" note={revenue.setup.note} hint={REVENUE_TIPS.overall} />
         )}
       </Grid>
 
@@ -167,7 +168,6 @@ export default function Dashboard() {
             </s-table-body>
           </s-table>
         )}
-        {d.topProducts.length > 0 ? <p className="kv-note">Saves = customer saves of any variant of the product, right now. Price is the current starting price.</p> : null}
         {!d.catalogAvailable && d.topProducts.length > 0 ? <p className="kv-note">Product images and prices could not be loaded from Shopify just now.</p> : null}
       </Card>
     </Page>

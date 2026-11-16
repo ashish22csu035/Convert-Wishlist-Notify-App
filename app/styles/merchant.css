@@ -99,6 +99,7 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   gap: 8px;
 }
 .kv-range {
+  position: relative;
   min-width: 170px;
 }
 
@@ -153,6 +154,15 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   gap: 16px;
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   align-items: stretch; /* the two cards share one height, so their edges line up */
+}
+/* Both panels are columns, so the body of the shorter one fills the row and the two bottoms line up. */
+.kv-split > .kv-card {
+  display: flex;
+  flex-direction: column;
+}
+.kv-split > .kv-card > .kv-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 @media (max-width: 900px) {
   .kv-split {
@@ -446,11 +456,23 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   list-style: none;
   margin: 0;
   padding: 0;
+  /* A long log scrolls inside its own panel instead of making the row taller than the chart beside it. */
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.kv-feed:focus-visible {
+  outline: 2px solid var(--kv-primary);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 .kv-feed li {
   display: flex;
   gap: 12px;
-  padding: 10px 0;
+  padding: 12px 0;
+}
+.kv-feed li:first-child {
+  padding-top: 4px;
 }
 .kv-feed li + li {
   border-top: 1px solid var(--kv-border-soft);
@@ -474,7 +496,12 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.kv-feed-text > div:first-child {
+  color: var(--kv-text);
+  font-weight: 500;
+}
 .kv-feed-time {
+  margin-top: 2px;
   font-size: 12px;
   color: var(--kv-subdued);
 }
@@ -558,13 +585,14 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   border: 0;
   background: transparent;
   padding: 0;
-  cursor: help;
+  cursor: default;
   display: inline-flex;
   vertical-align: middle;
   margin-inline-start: 4px;
   color: var(--kv-subdued);
   border-radius: 999px;
 }
+.kv-hint s-icon { cursor: default; }
 .kv-hint:focus-visible {
   outline: 2px solid var(--kv-primary);
   outline-offset: 2px;
@@ -654,26 +682,6 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
 }
 
 /* ---------- Custom date range ---------- */
-.kv-range-apply {
-  appearance: none;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  padding: 7px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--kv-blue);
-  background: var(--kv-primary);
-  color: var(--kv-on-accent);
-  cursor: pointer;
-}
-.kv-range-apply:hover {
-  background: var(--kv-primary-hover);
-  border-color: var(--kv-primary-hover);
-}
-.kv-range-apply:focus-visible {
-  outline: 2px solid var(--kv-text);
-  outline-offset: 2px;
-}
 .kv-range-error {
   flex-basis: 100%;
   margin: 0;
@@ -693,49 +701,6 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   font-size: 12px;
   color: var(--kv-subdued);
 }
-
-/* ---------- Range calendar (Analytics custom range): one month, accent for the ends, a light tint between ---------- */
-/* The popover root is portalled to <body>, so it carries the .kv tokens itself but none of the page-panel look. */
-.kv.kv-pop-root { position: fixed; z-index: 1000; padding: 0; margin: 0; background: transparent; border-radius: 0; display: block; gap: 0; width: 0; height: 0; overflow: visible; }
-.kv-cal {
-  position: fixed;
-  z-index: 1000;
-  width: min(320px, calc(100vw - 16px));
-  padding: 14px;
-  background: var(--kv-surface);
-  border: 1px solid var(--kv-border);
-  border-radius: var(--kv-radius);
-  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.14), 0 1px 2px rgba(16, 24, 40, 0.06);
-  display: grid;
-  gap: 10px;
-}
-.kv-cal-summary { margin: 0; font-size: 13px; font-weight: 600; text-align: center; }
-.kv-cal-head { display: flex; align-items: center; justify-content: space-between; }
-.kv-cal-nav {
-  appearance: none; font: inherit; font-size: 18px; line-height: 1; width: 32px; height: 32px;
-  border: 1px solid var(--kv-border); border-radius: 8px; background: var(--kv-surface); color: var(--kv-text); cursor: pointer;
-}
-.kv-cal-nav:hover { background: var(--kv-hover); }
-.kv-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
-.kv-cal-weekday { text-align: center; font-size: 12px; color: var(--kv-subdued); padding: 4px 0; }
-.kv-cal-day {
-  appearance: none; font: inherit; font-size: 13px; height: 34px; border: 0; background: transparent; color: var(--kv-text);
-  border-radius: 0; cursor: pointer;
-}
-.kv-cal-day:hover:not(:disabled):not(.edge) { background: var(--kv-hover); border-radius: 8px; }
-.kv-cal-day.muted { color: var(--kv-disabled); }
-.kv-cal-day.today { font-weight: 700; text-decoration: underline; }
-.kv-cal-day.inside { background: #ededed; }
-.kv-cal-day.edge { background: var(--kv-primary); color: var(--kv-on-accent); border-radius: 8px; font-weight: 650; }
-.kv-cal-day:disabled { color: var(--kv-disabled); cursor: not-allowed; opacity: 0.5; }
-.kv-cal-day:focus-visible, .kv-cal-nav:focus-visible, .kv-cal-cancel:focus-visible { outline: 2px solid var(--kv-primary); outline-offset: 1px; }
-.kv-cal-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.kv-cal-cancel {
-  appearance: none; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px;
-  border: 1px solid var(--kv-border); background: var(--kv-surface); color: var(--kv-text); cursor: pointer;
-}
-.kv-cal-cancel:hover { background: var(--kv-hover); }
-.kv-range-apply:disabled { background: var(--kv-hover); border-color: var(--kv-border); color: var(--kv-disabled); cursor: not-allowed; }
 
 /* ---------- (i) popover ---------- */
 .kv-info {
@@ -907,6 +872,20 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
 
 /* ---------- Phones (up to 560px): fit, wrap and reflow only. Nothing above this width is touched. ---------- */
 @media (max-width: 560px) {
+  /* The long button label ("Design Your Wishlist in Wishlist Settings") cannot wrap: the card and the panel give it the room. */
+  section.kv-setup {
+    padding: 12px;
+  }
+  .kv-setup-step .kv-setup-panel {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 8px;
+  }
+  .kv-setup-step .kv-setup-art {
+    justify-content: flex-start;
+  }
+  .kv-setup-step .kv-setup-svg {
+    width: 112px;
+  }
   .kv {
     padding: 12px;
     border-radius: 12px;
@@ -918,12 +897,6 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   .kv-range {
     flex: 1 1 100%;
     min-width: 0;
-  }
-  .kv-range-apply,
-  .kv-cal-cancel,
-  .kv-cal-day,
-  .kv-cal-nav {
-    min-height: 40px;
   }
   .kv-range-error,
   .kv-range-note {
@@ -1168,40 +1141,79 @@ button.kv-tab {
 .kv-setup-icon:hover {
   background: rgba(0, 0, 0, 0.06);
 }
-.kv-setup-progress {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 12px 0 4px;
-  font-size: 13px;
-}
 .kv-setup-count {
+  display: inline-block;
+  max-width: 100%;
+  margin: 12px 0 0;
+  padding: 3px 12px;
+  border: 1px solid var(--kv-border);
+  border-radius: 999px;
+  background: var(--kv-surface);
+  color: var(--kv-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-.kv-setup-bar {
-  flex: 1;
-  height: 6px;
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.1);
-  overflow: hidden;
-}
-.kv-setup-bar span {
-  display: block;
-  height: 100%;
-  background: var(--kv-primary);
 }
 .kv-setup-steps {
   list-style: none;
-  margin: 8px 0 0;
+  margin: 12px 0 0;
   padding: 0;
 }
 .kv-setup-step {
+  border-top: 1px solid var(--kv-border);
+}
+.kv-setup-step.open {
+  background: var(--kv-hover);
+  border-radius: 10px;
+  border-top-color: transparent;
+}
+.kv-setup-step.open + .kv-setup-step {
+  border-top-color: transparent;
+}
+.kv-setup-row {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto;
   gap: 12px;
-  align-items: start;
-  padding: 12px 0;
-  border-top: 1px solid var(--kv-border);
+  align-items: center;
+  width: 100%;
+  padding: 14px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.kv-setup-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+.kv-setup-row:focus-visible {
+  outline: 2px solid var(--kv-primary);
+  outline-offset: -2px;
+}
+.kv-setup-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 0 12px 16px 48px;
+}
+.kv-setup-panel[hidden] {
+  display: none;
+}
+.kv-setup-art {
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+.kv-setup-svg {
+  display: block;
+  width: 160px;
+  max-width: 100%;
+  height: auto;
 }
 .kv-setup-mark {
   display: inline-flex;
@@ -1209,14 +1221,17 @@ button.kv-tab {
   justify-content: center;
   width: 20px;
   height: 20px;
-  margin-top: 1px;
-  border: 2px dashed var(--kv-pink);
+  border: 2px solid #8a8a8a;
   border-radius: 50%;
   box-sizing: border-box;
 }
 .kv-setup-step.done .kv-setup-mark {
   border: 0;
-  background: var(--kv-green);
+  background: #303030;
+  color: #fff;
+}
+.kv-setup-tick {
+  display: block;
   color: #fff;
 }
 .kv-setup-title {
@@ -1229,11 +1244,7 @@ button.kv-tab {
   font-size: 12px;
   padding: 1px 8px;
   border-radius: 10px;
-  background: #fff1d6;
-  color: var(--kv-text);
-}
-.kv-setup-status.done {
-  background: #cdfee1;
+  background: #f1f1f1;
   color: var(--kv-text);
 }
 .kv-setup-body .kv-setup-help {
@@ -1241,23 +1252,14 @@ button.kv-tab {
 }
 .kv-setup-actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  min-width: 0;
 }
 .kv-setup-finish {
   margin: 8px 0 0;
-}
-@media (max-width: 640px) {
-  .kv-setup-step {
-    grid-template-columns: 24px minmax(0, 1fr);
-  }
-  .kv-setup-actions {
-    grid-column: 2;
-    flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-  }
 }
 
 /* Notify Me Settings previews (app/components/notify-settings-form.jsx) */

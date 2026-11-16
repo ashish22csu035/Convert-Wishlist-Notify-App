@@ -80,7 +80,7 @@ test("the standard controls are themed: selected, hover, disabled and keyboard f
   assert.match(css, /\.kv-pager span\.btn \{\s*color: var\(--kv-disabled\);/);
   assert.match(css, /\.kv-tab:hover \{\s*background: var\(--kv-hover\);/);
   assert.ok(contrast(tokens["kv-disabled"], tokens["kv-surface-2"]) >= 2.5 && contrast(tokens["kv-disabled"], tokens["kv-surface-2"]) < contrast(tokens["kv-subdued"], tokens["kv-surface-2"]), "disabled is dimmer than secondary text");
-  assert.match(css, /\.kv-cal \{[^}]*position: fixed;[^}]*z-index: 1000;[^}]*background: var\(--kv-surface\)/s);
+  assert.equal(/\.kv-cal/.test(css), false, "the date range is a Polaris popover: no hand-made calendar styles remain");
   assert.match(css, /\.kv-info-panel \{[^}]*background: var\(--kv-surface-2\)/s);
   assert.match(css, /\.kv :focus-visible \{\s*outline-color: var\(--kv-primary\);/);
 });
@@ -116,8 +116,8 @@ test("chart and funnel colours: features keep their colour, series never share o
   const colours = (block) => [...block.matchAll(/color: "var\(--kv-([a-z]+)\)"/g)].map((m) => m[1]);
   const wishlist = colours(sw.slice(sw.indexOf("return [", sw.indexOf("Products added") - 120), sw.indexOf("];", sw.indexOf("Products added"))));
   const notify = colours(sw.slice(sw.indexOf('"Subscribed"') - 60, sw.indexOf("];", sw.indexOf('"Subscribed"'))));
-  assert.deepEqual(wishlist, ["violet", "pink", "cyan"]);
-  assert.deepEqual(notify, ["blue", "subdued", "cyan"]);
+  assert.deepEqual(wishlist, ["violet", "cyan", "pink"], "black, then medium grey, then lighter grey");
+  assert.deepEqual(notify, ["blue", "cyan", "pink"]);
   assert.equal(new Set(wishlist).size, 3);
   assert.equal(new Set(notify).size, 3);
   assert.equal(fs.readFileSync("app/components/activity-chart.jsx", "utf8").includes('fill="#fff"'), false, "chart dots take the card colour");

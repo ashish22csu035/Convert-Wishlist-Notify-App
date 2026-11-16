@@ -640,7 +640,10 @@ test("card view: setup states show no figures; ready shows each feature with its
   assert.deepEqual(options[0].details, ["3 attributed orders · last 30 days", "Full order value: $140.00"]);
   assert.deepEqual(options[2].details, ["0 attributed orders · last 30 days"], "a confirmed zero is shown as zero");
   assert.equal(new Set(options.map((o) => o.hint)).size, 3, "each option explains itself");
-  assert.match(format.ATTRIBUTION_FOOTNOTE, /not the whole order/);
+  assert.equal(options[0].hint, format.REVENUE_TIPS.overall);
+  assert.doesNotMatch(options[0].hint, /refund/i, "the tip does not mention refunds");
+  assert.equal(options[1].hint, format.REVENUE_TIPS.wishlist);
+  assert.equal(options[2].hint, format.REVENUE_TIPS.notifyMe);
 
   const mixed = format.attributionView({ ...ready, mixedCurrency: true, overall: { orders: 3, revenue: null, orderValue: null } }, 30).options[0];
   assert.equal(mixed.value, null);

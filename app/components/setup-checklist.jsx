@@ -1,7 +1,8 @@
 /* eslint-disable react/prop-types -- plain JavaScript project: small local helper components are not given PropTypes */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useFetcher, useLocation, useNavigate } from "react-router";
-import { withEmbeddedParams } from "../utils/embedded-url";
+import { useFetcher } from "react-router";
+import { ILLUSTRATIONS } from "./setup-illustrations";
+import { WishlistSettingsModal } from "./wishlist-settings-modal";
 import { detectThemeSetup, setupChecklist } from "../utils/onboarding-shared";
 import { themeEditorLinks } from "../utils/theme-editor";
 
@@ -58,14 +59,17 @@ function useThemeSetup() {
 // closing the checklist is saved for the shop (see the Dashboard route's action) and it can be shown again while setup is incomplete.
 export function SetupChecklist({ setup }) {
   const fetcher = useFetcher();
-  const navigate = useNavigate();
-  const { search } = useLocation();
+  const [designOpen, setDesignOpen] = useState(false); // Wishlist Settings dialog, over this Dashboard
   const [open, setOpen] = useState(true);
+  const [picked, setPicked] = useState(undefined); // the step the merchant opened or closed; undefined until they do
   const { theme } = useThemeSetup();
   const { steps, completed, total, allDone, dismissed } = setupChecklist(setup.state, { appearanceSaved: setup.appearanceSaved, theme });
   const { embedUrl, blockUrl } = themeEditorLinks(setup.shop, setup.apiKey);
   const send = (intent) => fetcher.submit({ intent }, { method: "POST" });
   const busy = fetcher.state !== "idle";
+
+  // One step open at a time. Until the merchant picks one, the first step that is not complete is open (none when all are).
+  const expanded = picked === undefined ? (steps.find((step) => !step.completed)?.key ?? null) : picked;
 
   if (dismissed && allDone) return null;
   if (dismissed) {
@@ -102,50 +106,65 @@ export function SetupChecklist({ setup }) {
           </button>
         </div>
       </div>
-      <div className="kv-setup-progress">
-        <span className="kv-setup-count">
-          {completed} of {total} steps completed
-        </span>
-        <div className="kv-setup-bar" role="progressbar" aria-label="Setup progress" aria-valuemin={0} aria-valuemax={total} aria-valuenow={completed}>
-          <span style={{ width: `${(completed / total) * 100}%` }} />
-        </div>
-      </div>
+      <p className="kv-setup-count" aria-live="polite">
+        {completed}/{total} completed
+      </p>
       {open ? (
         <ol id="kv-setup-steps" className="kv-setup-steps">
-          {steps.map((step) => (
-            <li key={step.key} className={`kv-setup-step${step.completed ? " done" : ""}`}>
-              <span className="kv-setup-mark" aria-hidden="true">
-                {step.completed ? <s-icon type="check" size="small" /> : null}
-              </span>
-              <div className="kv-setup-body">
-                <div className="kv-setup-title">
-                  <strong>{step.title}</strong>
-                  <span className={`kv-setup-status${step.completed ? " done" : ""}`}>{step.status}</span>
+          {steps.map((step) => {
+            const isOpen = expanded === step.key;
+            const Art = ILLUSTRATIONS[step.key];
+            return (
+              <li key={step.key} className={`kv-setup-step${step.completed ? " done" : ""}${isOpen ? " open" : ""}`}>
+                {/* The whole row is the disclosure button; the step's own action lives in the panel, never inside it. */}
+                <button type="button" className="kv-setup-row" id={`kv-step-${step.key}`} aria-expanded={isOpen} aria-controls={`kv-step-panel-${step.key}`} onClick={() => setPicked(isOpen ? null : step.key)}>
+                  <span className="kv-setup-mark" aria-hidden="true">
+                    {step.completed ? (
+                      <svg className="kv-setup-tick" viewBox="0 0 20 20" width="12" height="12" focusable="false">
+                        <path d="M4.5 10.5 8 14l7.5-8" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    ) : null}
+                  </span>
+                  <span className="kv-setup-title">
+                    <strong>{step.title}</strong>
+                    {step.completed ? <span className="kv-setup-status done">Completed</span> : <span className="kv-sr">Not completed</span>}
+                  </span>
+                  <s-icon type={isOpen ? "chevron-up" : "chevron-down"} size="small" aria-hidden="true" />
+                </button>
+                <div className="kv-setup-panel" id={`kv-step-panel-${step.key}`} role="region" aria-labelledby={`kv-step-${step.key}`} hidden={!isOpen}>
+                  <div className="kv-setup-body">
+                    <p>{step.description}</p>
+                    {step.themeStep && !step.completed && !step.checking ? (
+                      <p className="kv-setup-help">
+                        {step.unknown ? "Shopify didn’t report this step’s status just now, so it isn’t counted as done. Use the button below; this step updates by itself when you come back. " : ""}
+                        {destination[step.key].help}
+                      </p>
+                    ) : null}
+                    <div className="kv-setup-actions">
+                      {step.key === "configure" ? (
+                        <s-button onClick={() => setDesignOpen(true)} aria-haspopup="dialog">
+                          {step.action}
+                        </s-button>
+                      ) : step.completed ? (
+                        <s-button disabled>{step.doneAction}</s-button>
+                      ) : (
+                        <s-button href={destination[step.key].href} target="_blank" disabled={step.checking || undefined}>
+                          {step.action}
+                        </s-button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="kv-setup-art" aria-hidden="true">
+                    <Art />
+                  </div>
                 </div>
-                <p>{step.description}</p>
-                {step.themeStep && !step.completed && !step.checking ? (
-                  <p className="kv-setup-help">
-                    {step.unknown ? "Shopify didn’t report this step’s status just now, so it isn’t counted as done. Use the button below; this step updates by itself when you come back. " : ""}
-                    {destination[step.key].help}
-                  </p>
-                ) : null}
-              </div>
-              <div className="kv-setup-actions">
-                {step.key === "configure" ? (
-                  <s-button href="/app/wishlist-settings" onClick={() => navigate(withEmbeddedParams("/app/wishlist-settings", search))}>
-                    {step.action}
-                  </s-button>
-                ) : (
-                  <s-button href={destination[step.key].href} target="_blank">
-                    {step.action}
-                  </s-button>
-                )}
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ol>
       ) : null}
       {open && allDone ? <p className="kv-setup-help kv-setup-finish">Setup is complete. You can dismiss this guide.</p> : null}
+      <WishlistSettingsModal open={designOpen} onClosed={() => setDesignOpen(false)} />
     </section>
   );
 }

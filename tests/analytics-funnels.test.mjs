@@ -165,7 +165,7 @@ test("Analytics page source: the four KPIs, the selector over the two funnels, a
   const sessionGrid = source.slice(source.indexOf("<Grid>", afterFirst), source.indexOf("</Grid>", afterFirst));
   assert.deepEqual([...sessionGrid.matchAll(/label="([^"]+)"/g)].map((m) => m[1]), ["Wishlist sessions", "Notify Me sessions"]);
   assert.ok(source.indexOf('label="Wishlist sessions"') < source.indexOf('<Card title="Product funnel">'), "directly below the four, above the funnel");
-  assert.equal((sessionGrid.match(/not customers and not total events/g) ?? []).length, 2, "both tooltips say what is counted");
+  assert.equal((sessionGrid.match(/Actions close together count once/g) ?? []).length, 2, "both tooltips say what is counted");
   assert.match(source, /<FunnelSwitch funnels={funnels} rangeLabel={words\.label} \/>/);
   assert.match(source, /buildFeatureFunnel\("wishlist", \{ window: analytics\.activity\.window, attribution \}\)/, "the existing dashboard counts and attribution service are reused");
   for (const gone of [

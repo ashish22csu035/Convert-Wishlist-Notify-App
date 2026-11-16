@@ -19,6 +19,7 @@ import {
   Pager,
   ParamSelect,
   ProductCell,
+  REVENUE_TIPS,
   SearchBox,
   Tabs,
   attributionView,
@@ -84,14 +85,14 @@ export default function WishlistPage() {
       ) : (
         <>
           <Grid>
-            <KpiCard label="Saved items" value={overview.totals.savedItems} icon="heart" tone="violet" note="Current total: one per customer and variant" hint="How many items customers have saved right now. Removed items are not counted, and it does not depend on the date range." />
-            <KpiCard label="Wishlisted products" value={overview.totals.products} icon="product" tone="violet" note="Current total: distinct products" hint="Different products with at least one saved variant right now. Saved items can be higher, because one product can be saved in several variants or by several customers." />
-            <KpiCard label="Customers with saved items" value={overview.totals.customers} icon="person" tone="violet" note="Current total" hint="Logged-in customers who have at least one item saved right now." />
-            <KpiCard label={`Added (${words.label})`} value={overview.window.added} icon="plus-circle" tone="violet" note={`${formatNumber(overview.window.removed)} removed · ${formatNumber(overview.window.clicked)} opened, same period`} hint="Add events recorded in the date range (event time, UTC). It counts every add, including items removed later." />
+            <KpiCard label="Saved items" value={overview.totals.savedItems} icon="heart" tone="violet" note="Current total: one per customer and variant" hint="Items customers have saved right now." />
+            <KpiCard label="Wishlisted products" value={overview.totals.products} icon="product" tone="violet" note="Current total: distinct products" hint="Different products saved, regardless of how many times each was saved." />
+            <KpiCard label="Customers with saved items" value={overview.totals.customers} icon="person" tone="violet" note="Current total" hint="Logged-in customers with at least one saved item." />
+            <KpiCard label={`Added (${words.label})`} value={overview.window.added} icon="plus-circle" tone="violet" note={`${formatNumber(overview.window.removed)} removed · ${formatNumber(overview.window.clicked)} opened, same period`} hint="Products added to Wishlist, including items removed later." />
             {revenueOption ? (
-              <KpiCard label="Wishlist-attributed revenue" value={revenueOption.value} display={revenueOption.display} icon="cart" tone="green" note={revenueOption.details.join(" · ")} hint="Revenue from purchased products customers had saved to their Wishlist, 7-day last touch. Only the matching items are counted, not the whole order. Uses the order date and the same data as the Dashboard and Analytics." />
+              <KpiCard label="Wishlist-attributed revenue" value={revenueOption.value} display={revenueOption.display} icon="cart" tone="green" note={revenueOption.details.join(" · ")} hint={REVENUE_TIPS.wishlist} />
             ) : (
-              <KpiCard label="Wishlist-attributed revenue" value={null} display={revenueSetup.display} icon="cart" note={revenueSetup.note} hint="Revenue from purchased products customers had saved to their Wishlist, 7-day last touch." />
+              <KpiCard label="Wishlist-attributed revenue" value={null} display={revenueSetup.display} icon="cart" note={revenueSetup.note} hint={REVENUE_TIPS.wishlist} />
             )}
           </Grid>
 

@@ -139,12 +139,14 @@
       applyFeatures(features);
       applyAppearance(features && features.appearance, true);
       injectHearts(document);
+      kw.productIcon = showsProductIcon(features);
 
       var needsExtras =
         document.querySelector('[data-kw-button]') ||
         config.headerIcon ||
         config.collectionCards ||
         config.notifyEnabled ||
+        kw.productIcon ||
         document.querySelector('[data-kw-page-body]');
       if (needsExtras) ensureExtras().catch(function () {});
 
@@ -155,6 +157,12 @@
         }, function () {});
       }
     });
+  }
+
+  // Wishlist Settings > Product page > Display on product page is Icon only or Both: the extras script adds the icon.
+  function showsProductIcon(features) {
+    var page = features && features.appearance && features.appearance.productPage;
+    return Boolean(page) && (page.displayMode === 'icon' || page.displayMode === 'both');
   }
 
   // Which features the merchant has switched on (the server enforces the same switches on every write).

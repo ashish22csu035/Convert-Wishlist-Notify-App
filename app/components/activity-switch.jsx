@@ -15,14 +15,14 @@ export function chartSeries(view, values) {
   if (view === "notify") {
     return [
       { key: "subscribed", label: "Subscribed", color: "var(--kv-blue)", values: values.NOTIFY_SUBSCRIBED },
-      { key: "unsubscribed", label: "Unsubscribed", color: "var(--kv-subdued)", values: values.NOTIFY_UNSUBSCRIBED },
-      { key: "sent", label: "Restock emails sent", color: "var(--kv-cyan)", values: values.RESTOCK_EMAIL_SENT },
+      { key: "unsubscribed", label: "Unsubscribed", color: "var(--kv-cyan)", values: values.NOTIFY_UNSUBSCRIBED },
+      { key: "sent", label: "Restock emails sent", color: "var(--kv-pink)", values: values.RESTOCK_EMAIL_SENT },
     ];
   }
   return [
     { key: "added", label: "Products added", color: "var(--kv-violet)", values: values.WISHLIST_ADDED },
-    { key: "users", label: "Unique users", color: "var(--kv-pink)", values: values.wishlistUsers },
-    { key: "clicks", label: "Product clicks", color: "var(--kv-cyan)", values: values.WISHLIST_PRODUCT_CLICKED },
+    { key: "users", label: "Unique users", color: "var(--kv-cyan)", values: values.wishlistUsers },
+    { key: "clicks", label: "Product clicks", color: "var(--kv-pink)", values: values.WISHLIST_PRODUCT_CLICKED },
   ];
 }
 
@@ -39,9 +39,6 @@ export function ActivitySwitch({ series, rangeLabel, initial = "wishlist" }) {
         ))}
       </div>
       <ActivityChart label={`${current.label}, ${rangeLabel}`} days={series.days} series={chartSeries(current.key, series.values)} />
-      <p className="kv-note" style={{ padding: "8px 0 0" }}>
-        Daily counts, UTC days. {current.key === "wishlist" ? "“Unique users” counts different customers per day. " : ""}Days before the app started tracking this store are not shown.
-      </p>
     </div>
   );
 }

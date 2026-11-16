@@ -401,7 +401,7 @@ test("saved products render as table rows with the real count, price and stock s
   assert.match(text(snow, ".kw-price"), /\$799\.95/, "compare-at price shown");
   assert.equal(text(snow, ".kw-stock"), "In stock");
   assert.equal(snow.findAll("img").length, 1);
-  assert.equal(text(snow, ".kw-btn-cart"), "Add to cart");
+  assert.equal(text(snow, ".kw-btn-cart"), "Move to cart");
 
   assert.equal(text(gift, ".kw-stock"), "Out of stock");
   assert.equal(text(gift, ".kw-btn-cart"), "Notify Me");
@@ -480,7 +480,7 @@ test("an unconfirmed cart add keeps the wishlist item and shows no success", asy
   assert.equal(page.log.requests.filter((r) => r.body.op === "remove").length, 0, "wishlist untouched");
   assert.equal(page.log.requests.filter((r) => r.body.op === "cart_add").length, 0, "no successful-cart event for an unconfirmed add");
   assert.equal(page.rows().length, 1);
-  assert.equal(text(row, ".kw-btn-cart"), "Add to cart", "no false 'Added to cart'");
+  assert.equal(text(row, ".kw-btn-cart"), "Move to cart", "no false 'Added to cart'");
   assert.equal(row.find(".kw-btn-cart").disabled, false);
 });
 
@@ -499,7 +499,7 @@ test("a failed cart add keeps the wishlist item, shows Shopify's message and nev
   assert.equal(page.rows().length, 1);
   assert.equal(page.count.textContent, "(1 Item)");
   assert.equal(row.find(".kw-btn-cart").disabled, false);
-  assert.equal(text(row, ".kw-btn-cart"), "Add to cart");
+  assert.equal(text(row, ".kw-btn-cart"), "Move to cart");
 });
 
 test("a stock refusal (422) shows a generic message without Shopify's text or any quantity", async () => {
@@ -848,7 +848,7 @@ const everyText = (page) => page.pageBody.textContent;
 test("a saved variant that is available shows Add to cart and never 'Choose options'", async () => {
   const page = await mount({ backend: { items: [SNOW_LARGE, SHIRT_ON] } });
   for (const row of page.rows()) {
-    assert.equal(text(row, ".kw-btn-cart"), "Add to cart");
+    assert.equal(text(row, ".kw-btn-cart"), "Move to cart");
     assert.equal(row.find(".kw-btn-cart").tag, "button", "a cart button, not a link to a variant-selection page");
     assert.equal(row.find(".kw-btn-cart").disabled, false);
   }
@@ -911,7 +911,7 @@ test("a failed cart add keeps the exact variant on the wishlist", async () => {
 test("a saved variant that is unavailable shows Notify Me and can never be added to the cart", async () => {
   const page = await mount({ backend: { items: [SHIRT_ON, SHIRT_SOLD_OUT] } });
   const [on, off] = page.rows();
-  assert.equal(text(on, ".kw-btn-cart"), "Add to cart", "another variant of the same product is still buyable");
+  assert.equal(text(on, ".kw-btn-cart"), "Move to cart", "another variant of the same product is still buyable");
   assert.equal(text(off, ".kw-btn-cart"), "Notify Me");
   assert.equal(text(off, ".kw-stock"), "Out of stock");
   assert.equal(off.find(".kw-qty__input").disabled, true);
@@ -956,7 +956,7 @@ test("a saved variant that no longer exists in the product shows as unavailable,
 test("Notify Me on a sold-out saved variant sends that exact variant id and keeps it on the wishlist", async () => {
   const page = await mount({ backend: { items: [SHIRT_ON, SHIRT_SOLD_OUT] } });
   const [on, off] = page.rows();
-  assert.equal(text(on, ".kw-btn-cart"), "Add to cart", "available variant keeps Add to cart");
+  assert.equal(text(on, ".kw-btn-cart"), "Move to cart", "available variant keeps Add to cart");
   await off.find(".kw-btn-cart").click();
   await tick();
   assert.deepEqual(page.log.notify, [{ op: "subscribe", variantId: "42", storefrontSoldOut: false }], "only the exact saved variant id is sent, with no claim about the storefront (this page has not read it)");
@@ -1072,7 +1072,7 @@ test("a variant the storefront now sells (a restock) is corrected to Add to cart
   assert.ok(page.log.productFetches.filter((h) => h === "shirt").length >= 2, "the product was re-read from the storefront");
   assert.match(page.log.toasts.at(-1), /back in stock/i);
   assert.equal(text(row, ".kw-stock"), "In stock");
-  assert.equal(text(row, ".kw-btn-cart"), "Add to cart");
+  assert.equal(text(row, ".kw-btn-cart"), "Move to cart");
   assert.equal(page.rows().length, 1, "still on the wishlist");
 });
 

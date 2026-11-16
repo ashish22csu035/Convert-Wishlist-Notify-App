@@ -11,7 +11,7 @@ import { useEffect, useRef } from "react";
 // Keeps only the true flags: <s-button {...flags({ disabled, loading })}>.
 export const flags = (object) => Object.fromEntries(Object.entries(object).filter(([, on]) => Boolean(on)));
 
-function useNativeEvent(ref, type, handler) {
+export function useNativeEvent(ref, type, handler) {
   const latest = useRef(handler);
   latest.current = handler;
   useEffect(() => {

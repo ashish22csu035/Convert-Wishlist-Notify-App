@@ -96,13 +96,13 @@ export const ATTRIBUTION_MODES = [
 
 // The long explanations live in a tooltip (the card's (i) icon), not on the card: the card itself shows the
 // figure, the order count and, when there are orders, the full value of those orders.
-const ATTRIBUTION_CAPTIONS = {
-  overall: "Revenue from purchased items credited to Wishlist or Notify Me. Each order is counted once.",
-  wishlist: "Revenue from purchased products customers had saved to their Wishlist.",
-  notifyMe: "Revenue from items bought after a restock email for them was sent.",
+// One short sentence per view, the same wording on the Dashboard, Wishlist and Notify Me pages. It follows
+// app/models/order-attribution.server.js: saves and restock emails have no time limit, add-to-cart actions 7 days.
+export const REVENUE_TIPS = {
+  overall: "Sales from products linked to Wishlist or Notify Me.",
+  wishlist: "Sales from products linked to Wishlist.",
+  notifyMe: "Sales from products bought after a restock email.",
 };
-export const ATTRIBUTION_FOOTNOTE = "Only the eligible purchased items are counted, not the whole order. Last touch within 7 days: it shows association, not proof of cause.";
-const ATTRIBUTION_ORDER_DATES = "Orders are dated by when they were placed, within the date range. Refunds on the credited items are subtracted.";
 
 // `range` is a number of days (a preset) or the period the screen shows ({ kind, days, from, to }).
 export function rangeWords(range) {
@@ -132,7 +132,7 @@ export function attributionView(attribution, range, storeCurrency = null) {
       value: unavailable ? null : orders,
       display: unavailable ? undefined : formatMoney(result.revenue, currency) ?? undefined,
       details,
-      hint: `${ATTRIBUTION_CAPTIONS[key]} ${ATTRIBUTION_FOOTNOTE} ${ATTRIBUTION_ORDER_DATES}`,
+      hint: REVENUE_TIPS[key],
       unavailableNote: "Orders in more than one currency cannot be added together.",
     };
   });

@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { JSDOM } from "jsdom";
 import { EMBED_HANDLE, ONBOARDING_DEFAULT, ONBOARDING_INTENTS, PRODUCT_BLOCK_HANDLE, applyOnboardingIntent, detectThemeSetup, normalizeOnboarding, setupChecklist } from "../app/utils/onboarding-shared.js";
+import { DEFAULT_APPEARANCE } from "../app/utils/wishlist-appearance-shared.js";
 import { themeEditorLinks } from "../app/utils/theme-editor.js";
 
 const require = createRequire(import.meta.url);
@@ -125,7 +126,19 @@ before(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const outfile = path.join(OUT_DIR, `checklist-${Date.now().toString(36)}.mjs`);
-  await build({ entryPoints: ["app/components/setup-checklist.jsx"], outfile, bundle: true, format: "esm", platform: "node", jsx: "automatic", external: ["react", "react/jsx-runtime", "react-dom", "react-router"], logLevel: "silent" });
+  await build({ entryPoints: ["app/components/setup-checklist.jsx"], outfile, bundle: true, format: "esm", platform: "node", jsx: "automatic", external: ["react", "react/jsx-runtime", "react-dom", "react-router"],
+    plugins: [
+      {
+        name: "raw-text", // Vite's virtual storefront stylesheet (pulled in by the settings form's preview), as text
+        setup(b) {
+          b.onResolve({ filter: /^virtual:konvert-storefront-css$/ }, () => ({ path: path.resolve("extensions/konvert-wishlist/assets/konvert-wishlist.css"), namespace: "raw-text" }));
+          b.onResolve({ filter: /\?raw$/ }, (args) => ({ path: path.resolve(args.resolveDir, args.path.replace(/\?raw$/, "")), namespace: "raw-text" }));
+          b.onLoad({ filter: /.*/, namespace: "raw-text" }, (args) => ({ contents: fs.readFileSync(args.path, "utf8"), loader: "text" }));
+        },
+      },
+    ],
+    logLevel: "silent",
+  });
   Checklist = await import(pathToFileURL(outfile).href);
   React = (await import("react")).default;
   ReactRouter = await import("react-router");
@@ -145,7 +158,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const byText = (selector, text) => [...container.querySelectorAll(selector)].find((el) => el.textContent.trim() === text);
 const label = (text) => container.querySelector(`button[aria-label="${text}"]`);
 const unmount = () => React.act(async () => root.unmount());
-const statuses = () => [...container.querySelectorAll(".kv-setup-status")].map((e) => e.textContent);
+// Per step, as the merchant sees it: the Completed pill, a disabled button while Shopify is being asked, the "isn't counted" help, or an action.
+const statuses = () =>
+  [...container.querySelectorAll("li.kv-setup-step")].map((li) =>
+    li.querySelector(".kv-setup-status") ? "Completed" : li.querySelector("s-button[disabled]") ? "Checking…" : /isn’t counted/.test(li.textContent) ? "Can’t check" : "Action required",
+  );
 
 // A stand-in for the Shopify Admin's App Bridge: `answer` is what shopify.app.extensions() resolves to (an Error is
 // thrown instead). Pass null to simulate no App Bridge at all. `calls` counts the requests made.
@@ -185,7 +202,8 @@ async function mountChecklist({ store = new Map(), shop = SHOP_A, appearanceSave
         return { ok: Boolean(next) };
       },
     },
-    { path: "/app/wishlist-settings", Component: () => h("div", { id: "settings-page" }, "settings") },
+    { path: "/app/wishlist-settings", Component: () => h("div", { id: "settings-page" }, "settings"), action: async () => ({ ok: true, appearance: DEFAULT_APPEARANCE }) },
+    { path: "/app/wishlist-settings-data", loader: () => ({ ok: true, appearance: DEFAULT_APPEARANCE, shop, apiKey: "key123" }) },
   ]);
   container = document.getElementById("root");
   container.innerHTML = "";
@@ -200,11 +218,15 @@ test("it shows the header, the real progress, a checkmark or pending mark per st
   await mountChecklist({ appearanceSaved: true });
   assert.equal(container.querySelector("h3").textContent, "Get started with Konvert Wishlist And Notify");
   assert.match(container.textContent, /Complete these steps to enable Wishlist and Notify Me on your storefront\./);
-  assert.match(container.textContent, /2 of 3 steps completed/);
-  assert.equal(container.querySelector('[role="progressbar"]').getAttribute("aria-valuenow"), "2");
+  assert.match(container.textContent, /2\/3 completed/);
+  assert.equal(container.querySelector(".kv-setup-count").textContent, "2/3 completed", "the counter sits under the description");
+  assert.equal(container.querySelector(".kv-setup-head .kv-setup-count"), null, "and not beside the heading");
+  assert.equal(container.querySelector('[role="progressbar"]'), null);
+  assert.equal(container.querySelectorAll("li s-button[disabled]").length, 1, "the completed embed step has a disabled button; the others stay actionable");
+  assert.deepEqual([...container.querySelectorAll("li s-button")].map((b) => b.textContent), ["Design Your Wishlist in Wishlist Settings", "Activated", "Set up product page"]);
   assert.deepEqual(statuses(), ["Completed", "Completed", "Action required"]);
-  assert.equal(container.querySelectorAll("li s-icon[type=check]").length, 2);
-  assert.deepEqual([...container.querySelectorAll("li strong")].map((e) => e.textContent), ["Configure your Wishlist", "Activate the app in your theme", "Add the Wishlist block to the product page"]);
+  assert.equal(container.querySelectorAll("li svg.kv-setup-tick path[stroke='#fff']").length, 2);
+  assert.deepEqual([...container.querySelectorAll("li strong")].map((e) => e.textContent), ["Design your Wishlist", "Activate your app in your theme", "Add the Wishlist block to the product page"]);
   await unmount();
 });
 
@@ -221,14 +243,14 @@ test("both theme steps complete only when Shopify reports them active", async ()
   fakeShopify(ON);
   await mountChecklist({ appearanceSaved: true });
   assert.deepEqual(statuses(), ["Completed", "Completed", "Completed"]);
-  assert.match(container.textContent, /3 of 3 steps completed/);
+  assert.match(container.textContent, /3\/3 completed/);
   assert.match(container.textContent, /Setup is complete/);
   await unmount();
 
   fakeShopify([themeExt(block("wishlist-embed", "available"), block("wishlist-button", "available"))]);
   await mountChecklist({ appearanceSaved: true });
   assert.deepEqual(statuses(), ["Completed", "Action required", "Action required"]);
-  assert.match(container.textContent, /1 of 3 steps completed/);
+  assert.match(container.textContent, /1\/3 completed/);
   await unmount();
 });
 
@@ -247,10 +269,10 @@ test("opening a theme editor completes nothing, and each action goes to the righ
   assert.deepEqual(posted, [], "nothing was sent");
   assert.equal(store.size, 0, "nothing was saved");
   assert.equal(shopify.calls, callsBefore, "clicking a link does not even ask Shopify again");
-  assert.match(container.textContent, /0 of 3 steps completed/);
+  assert.match(container.textContent, /0\/3 completed/);
 
-  await click(byText("s-button", "Configure Wishlist"));
-  assert.ok(container.querySelector("#settings-page"), "Configure Wishlist opens the existing Wishlist Settings route");
+  await click(byText("s-button", "Design Your Wishlist in Wishlist Settings"));
+  assert.equal(container.querySelector("#settings-page"), null, "Design your Wishlist does not leave the Dashboard");
   await unmount();
 });
 
@@ -260,7 +282,7 @@ test("while Shopify has not answered yet the steps say Checking and count for no
   window.shopify = { app: { extensions: () => new Promise((resolve) => { release = () => resolve(ON); }) } };
   await mountChecklist({ appearanceSaved: true });
   assert.deepEqual(statuses(), ["Completed", "Checking…", "Checking…"]);
-  assert.match(container.textContent, /1 of 3 steps completed/);
+  assert.match(container.textContent, /1\/3 completed/);
   await act(() => release());
   await act(() => sleep(10));
   assert.deepEqual(statuses(), ["Completed", "Completed", "Completed"]);
@@ -272,7 +294,7 @@ test("an API error, a malformed answer or no App Bridge leaves the steps unknown
     fakeShopify(answer);
     await mountChecklist({ appearanceSaved: true });
     assert.deepEqual(statuses(), ["Completed", "Can’t check", "Can’t check"], String(answer));
-    assert.match(container.textContent, /1 of 3 steps completed/);
+    assert.match(container.textContent, /1\/3 completed/);
     assert.match(container.textContent, /isn’t counted as done/);
     assert.ok(byText("s-button", "Activate app embed"), "the editor links are still offered");
     await unmount();
@@ -292,7 +314,7 @@ test("returning to the tab asks Shopify again and picks up a change made in the 
   await act(() => sleep(10));
   assert.equal(shopify.calls, 2);
   assert.deepEqual(statuses(), ["Completed", "Completed", "Action required"]);
-  assert.match(container.textContent, /2 of 3 steps completed/);
+  assert.match(container.textContent, /2\/3 completed/);
 
   shopify.answer = new Error("down"); // a later failed recheck must not keep a stale green tick
   await act(() => sleep(3100));
@@ -327,7 +349,7 @@ test("collapse hides the steps and expands them again; it is a view choice and s
   assert.equal(label("Collapse setup guide").getAttribute("aria-expanded"), "true");
   await click(label("Collapse setup guide"));
   assert.equal(container.querySelector("ol"), null);
-  assert.match(container.textContent, /2 of 3 steps completed/, "progress stays visible");
+  assert.match(container.textContent, /2\/3 completed/, "progress stays visible");
   assert.equal(label("Expand setup guide").getAttribute("aria-expanded"), "false");
   await click(label("Expand setup guide"));
   assert.equal(container.querySelectorAll("li").length, 3);
@@ -447,4 +469,105 @@ dbTest("a store seen for the first time gets its own shop row, once, and nothing
   assert.equal(await prisma.shopSettings.count({ where: { shopId: one.id } }), 0, "no settings are invented");
   assert.equal((await ensureShop(domain)).installedAt.getTime(), one.installedAt.getTime(), "a later visit does not reset the install time");
   assert.equal((await prisma.shop.findUnique({ where: { id: other.id } })).currencyCode, "USD", "another shop is untouched");
+});
+
+test("Design your Wishlist opens the real Wishlist Settings form in a dialog over the Dashboard; Cancel closes it", async () => {
+  fakeShopify(ON);
+  await mountChecklist({ appearanceSaved: true });
+  const button = byText("s-button", "Design Your Wishlist in Wishlist Settings");
+  assert.equal(button.getAttribute("href"), null, "not a link to another page");
+  const modal = container.querySelector("s-modal#wishlist-settings-modal");
+  assert.ok(modal, "the dialog element exists");
+  assert.equal(modal.getAttribute("heading"), "Wishlist Settings");
+  assert.equal(modal.querySelector('[role="tab"]'), null, "nothing is loaded until it is opened");
+  let shown = 0;
+  let hidden = 0;
+  modal.showOverlay = () => { shown += 1; };
+  modal.hideOverlay = () => { hidden += 1; modal.dispatchEvent(new window.Event("afterhide")); };
+  await click(button);
+  await act(() => sleep(50));
+  assert.equal(shown, 1, "the dialog was shown");
+  assert.deepEqual([...modal.querySelectorAll('[role="tab"]')].map((t) => t.textContent), ["General", "Product page", "Collection page", "Wishlist page"], "the existing settings form is inside it");
+  assert.ok(byText("s-button", "Save"), "Save is in the dialog footer");
+  assert.equal(container.querySelector("#settings-page"), null, "the Settings route was not opened");
+  assert.match(container.textContent, /Get started with Konvert/, "the Dashboard is still mounted");
+  await click(byText("s-button", "Cancel"));
+  await act(() => sleep(20));
+  assert.equal(hidden, 1);
+  assert.equal(modal.querySelector('[role="tab"]'), null, "closed: the form is gone, the Dashboard stays");
+  assert.match(container.textContent, /Get started with Konvert/);
+  await unmount();
+});
+
+test("on a phone the step panel is one column with room for the long button label, and the illustration shrinks and moves under the text", () => {
+  const css = fs.readFileSync("app/styles/merchant.css", "utf8");
+  assert.match(css, /\.kv-setup-panel \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/s, "desktop: text left, illustration right");
+  const phone = css.slice(css.indexOf("@media (max-width: 560px)"));
+  assert.match(phone, /\.kv-setup-step \.kv-setup-panel \{\s*grid-template-columns: minmax\(0, 1fr\);\s*padding-inline: 8px;/);
+  assert.match(phone, /\.kv-setup-step \.kv-setup-svg \{\s*width: 112px;/);
+});
+
+// ---- expandable steps ----
+const rowOf = (key) => container.querySelector(`#kv-step-${key}`);
+const panelOf = (key) => container.querySelector(`#kv-step-panel-${key}`);
+const openKeys = () => ["configure", "embed", "product"].filter((k) => !panelOf(k).hasAttribute("hidden"));
+
+test("steps expand and collapse like a disclosure: one open at a time, the first incomplete one open to start", async () => {
+  fakeShopify([themeExt(block("wishlist-embed", "available"), block("wishlist-button", "available"))]);
+  await mountChecklist({ appearanceSaved: true });
+  assert.deepEqual(openKeys(), ["embed"], "step 1 is done, so the first step still to do is open");
+  assert.equal(rowOf("embed").getAttribute("aria-expanded"), "true");
+  assert.equal(rowOf("embed").getAttribute("aria-controls"), "kv-step-panel-embed");
+  assert.equal(panelOf("embed").getAttribute("aria-labelledby"), "kv-step-embed");
+  await click(rowOf("product"));
+  assert.deepEqual(openKeys(), ["product"], "opening one closes the other");
+  assert.equal(rowOf("embed").getAttribute("aria-expanded"), "false");
+  await click(rowOf("product"));
+  assert.deepEqual(openKeys(), [], "clicking an open step closes it, and it stays closed");
+  await click(rowOf("configure"));
+  assert.deepEqual(openKeys(), ["configure"]);
+  assert.match(container.textContent, /1\/3 completed/, "the counter is unaffected by opening steps");
+  await unmount();
+});
+
+test("the row is a real button holding only the indicator, title, pill and chevron; the action lives in the panel", async () => {
+  fakeShopify(ON);
+  await mountChecklist({ appearanceSaved: true });
+  assert.deepEqual(openKeys(), [], "everything done: nothing is forced open");
+  for (const key of ["configure", "embed", "product"]) {
+    const row = rowOf(key);
+    assert.equal(row.tagName, "BUTTON");
+    assert.equal(row.getAttribute("type"), "button");
+    assert.equal(row.querySelector("s-button"), null, `${key}: no button nested inside the disclosure button`);
+    assert.ok(panelOf(key).querySelector("s-button"), `${key}: the action is below the description`);
+    assert.match(row.textContent, /Completed/);
+  }
+  await unmount();
+});
+
+test("each step has its own decorative illustration beside its text, local SVG, hidden from assistive technology", async () => {
+  fakeShopify(ON);
+  await mountChecklist({ appearanceSaved: true });
+  for (const key of ["configure", "embed", "product"]) {
+    const art = panelOf(key).querySelector(".kv-setup-art");
+    assert.equal(art.getAttribute("aria-hidden"), "true", key);
+    assert.ok(art.querySelector("svg.kv-setup-svg"), `${key} has an inline svg`);
+    assert.equal(art.querySelector("img, image, use"), null, `${key}: no external image`);
+  }
+  const markup = [...container.querySelectorAll(".kv-setup-svg")].map((s) => s.innerHTML);
+  assert.equal(new Set(markup).size, 3, "three different illustrations");
+  assert.equal(/https?:/.test(fs.readFileSync("app/components/setup-illustrations.jsx", "utf8").replace(/xmlns="[^"]*"/g, "")), false, "nothing is fetched from anywhere");
+  await unmount();
+});
+
+test("Activated buttons are disabled and carry no link, so they cannot start the setup again", async () => {
+  fakeShopify(ON);
+  await mountChecklist({ appearanceSaved: true });
+  for (const key of ["embed", "product"]) {
+    const button = panelOf(key).querySelector("s-button");
+    assert.equal(button.textContent.trim(), "Activated");
+    assert.equal(button.hasAttribute("disabled"), true);
+    assert.equal(button.getAttribute("href"), null);
+  }
+  await unmount();
 });

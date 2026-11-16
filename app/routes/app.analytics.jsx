@@ -57,15 +57,15 @@ export default function AnalyticsPage() {
         </p>
       </s-banner>
       <Grid>
-        <KpiCard label="Products added to Wishlist" value={w.WISHLIST_ADDED} icon="heart" tone="violet" note={words.label} hint="Add events recorded in the date range, including items removed later." />
-        <KpiCard label="Products removed from Wishlist" value={w.WISHLIST_REMOVED} icon="minus-circle" tone="violet" note={words.label} hint="Remove events recorded in the date range." />
-        <KpiCard label="Notify Me subscriptions" value={w.NOTIFY_SUBSCRIBED} icon="notification" tone="blue" note={words.label} hint="New sign-ups in the date range." />
-        <KpiCard label="Restock emails sent" value={w.RESTOCK_EMAIL_SENT} icon="email" tone="blue" note={words.label} hint="Emails accepted by the mail server in the date range. This does not confirm delivery to the inbox or opens." />
+        <KpiCard label="Products added to Wishlist" value={w.WISHLIST_ADDED} icon="heart" tone="violet" note={words.label} hint="Products customers added to Wishlist, including items removed later." />
+        <KpiCard label="Products removed from Wishlist" value={w.WISHLIST_REMOVED} icon="minus-circle" tone="violet" note={words.label} hint="Products customers removed from Wishlist." />
+        <KpiCard label="Notify Me subscriptions" value={w.NOTIFY_SUBSCRIBED} icon="notification" tone="blue" note={words.label} hint="New sign-ups for restock alerts." />
+        <KpiCard label="Restock emails sent" value={w.RESTOCK_EMAIL_SENT} icon="email" tone="blue" note={words.label} hint="Emails sent to notify customers about restocks." />
       </Grid>
 
       <Grid>
-        <KpiCard label="Wishlist sessions" value={a.sessionActivity.wishlist.current} icon="chart-line" tone="violet" note={a.sessionActivity.wishlist.current === null ? "No session data for this range yet" : a.coverage && !a.coverage.complete ? `${words.label} · available days only` : words.label} hint="Wishlist sessions opened in the date range, including sessions where the customer only opened the Wishlist page. Each session counts once, on the day it started. These are sessions, not customers and not total events." />
-        <KpiCard label="Notify Me sessions" value={a.sessionActivity.notifyMe.current} icon="chart-line" tone="blue" note={a.sessionActivity.notifyMe.current === null ? "No session data for this range yet" : a.coverage && !a.coverage.complete ? `${words.label} · available days only` : words.label} hint="Notify Me sessions opened in the date range, including sessions where the customer only opened the form. Each session counts once, on the day it started. These are sessions, not customers and not total events; emails sent from the worker are not sessions." />
+        <KpiCard label="Wishlist sessions" value={a.sessionActivity.wishlist.current} icon="chart-line" tone="violet" note={a.sessionActivity.wishlist.current === null ? "No session data for this range yet" : a.coverage && !a.coverage.complete ? `${words.label} · available days only` : words.label} hint="Times customers used Wishlist. Actions close together count once." />
+        <KpiCard label="Notify Me sessions" value={a.sessionActivity.notifyMe.current} icon="chart-line" tone="blue" note={a.sessionActivity.notifyMe.current === null ? "No session data for this range yet" : a.coverage && !a.coverage.complete ? `${words.label} · available days only` : words.label} hint="Times customers used Notify Me. Actions close together count once." />
       </Grid>
 
       <Card title="Product funnel">

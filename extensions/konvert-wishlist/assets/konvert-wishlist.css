@@ -71,11 +71,15 @@ html[data-kw-general-use-theme-fonts='false'] .kw-header-icon__count {
   cursor: progress;
 }
 
+/* Product page button. The sizes below follow the theme's own Add to cart button: konvert-wishlist-theme.js reads that
+   button's computed style and writes --kw-theme-* on this block. Without it (no script yet, or no recognisable button)
+   every var() falls back to the plain values after the comma. The merchant's Wishlist Settings rules further down
+   (html[data-kw-product-page-*]) are more specific and still win. */
 .kw-block {
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
-  margin: 1rem 0 0;
+  margin: var(--kw-theme-gap, 0.625em) 0 0;
 }
 
 .kw-btn--product {
@@ -84,16 +88,21 @@ html[data-kw-general-use-theme-fonts='false'] .kw-header-icon__count {
   justify-content: center;
   gap: 0.5em;
   box-sizing: border-box;
-  width: 100%;
+  width: var(--kw-theme-width, 100%);
   max-width: 100%;
-  min-height: 44px;
-  padding: 0.5em 1em;
+  min-height: max(44px, var(--kw-theme-height, 44px));
+  padding: 0.5em var(--kw-theme-pad-x, 1em);
+  font-family: var(--kw-theme-font-family, inherit);
+  font-size: var(--kw-theme-font-size, inherit);
+  font-weight: var(--kw-theme-font-weight, inherit);
+  letter-spacing: var(--kw-theme-letter-spacing, inherit);
+  text-transform: var(--kw-theme-text-transform, none);
   line-height: 1.3;
   color: inherit;
   text-align: center;
   background: transparent;
   border: 1px solid currentColor;
-  border-radius: var(--buttons-radius, 4px);
+  border-radius: min(var(--kw-theme-radius, var(--buttons-radius, 4px)), calc(max(44px, var(--kw-theme-height, 44px)) / 2));
   touch-action: manipulation;
 }
 
@@ -153,6 +162,108 @@ html[data-kw-product-page-button-style='filled'] .kw-btn--product .kw-heart {
 
 html[data-kw-product-page-button-style='filled'] .kw-btn--product:hover {
   opacity: 0.9;
+}
+
+/* Product page display (Wishlist Settings > Product page > Display on product page). "button" is today's look and sets no
+   attribute. "icon" hides the Wishlist button block and shows only the standalone icon the Wishlist embed lays over the
+   product's main image; "both" shows the two. The standalone icon is a .kw-btn--product too, so it shares the button's save logic. */
+html[data-kw-product-page-display-mode='icon'] .kw-block {
+  display: none;
+}
+
+.kw-prodicon {
+  display: none;
+}
+
+/* The image's container: the script adds this class only where the theme left it unpositioned. */
+.kw-media-host {
+  position: relative;
+}
+
+html[data-kw-product-page-display-mode] .kw-prodicon {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  display: block;
+  margin: 0;
+  line-height: 1;
+}
+
+html[data-kw-product-page-enabled='false'] .kw-prodicon {
+  display: none !important;
+}
+
+/* The icon is also a .kw-btn--product (so it reuses the button's save and variant logic). The selector below is more specific
+   than the button's own Wishlist Settings rules (width, radius, filled style), so none of them reshape the icon. */
+html[data-kw-product-page-display-mode] .kw-btn--prodicon.kw-btn--product {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.92);
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  touch-action: manipulation;
+}
+
+.kw-btn--prodicon:hover {
+  background: #fff;
+}
+
+.kw-btn--prodicon:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+html[data-kw-product-page-display-mode] .kw-btn--prodicon.kw-btn--product .kw-heart {
+  width: 1.75em;
+  height: 1.75em;
+  color: var(--kw-general-default-color, var(--kw-accent, #d6336c));
+}
+
+html[data-kw-product-page-display-mode] .kw-btn--prodicon.kw-btn--product:hover .kw-heart {
+  color: var(--kw-general-hover-color, var(--kw-general-default-color, var(--kw-accent, #d6336c)));
+}
+
+html[data-kw-product-page-display-mode] .kw-btn--prodicon.kw-btn--product[aria-pressed='true'] .kw-heart {
+  color: var(--kw-general-active-color, var(--kw-general-default-color, var(--kw-accent, #d6336c)));
+}
+
+/* The accessible name ("Add to wishlist" / "Saved to wishlist") stays, visually hidden. */
+html[data-kw-product-page-display-mode] .kw-btn--prodicon .kw-btn__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+  clip: rect(0 0 0 0);
+}
+
+/* Position on the product image (Wishlist Settings > Product page): the same four corners as the collection page hearts. Top right is
+   the default and sets nothing. The icon's shape is the general icon type, like every other heart. */
+html[data-kw-product-page-image-position='top-left'] .kw-prodicon {
+  right: auto;
+  left: 12px;
+}
+
+html[data-kw-product-page-image-position='bottom-left'] .kw-prodicon {
+  top: auto;
+  right: auto;
+  bottom: 12px;
+  left: 12px;
+}
+
+html[data-kw-product-page-image-position='bottom-right'] .kw-prodicon {
+  top: auto;
+  bottom: 12px;
 }
 
 .kw-btn--loading {
@@ -354,7 +465,7 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
 
 .kw-page__title {
   margin: 0;
-  font-size: clamp(2rem, 3.2vw, 2.8rem);
+  font-size: clamp(1.25em, 3.2vw, 1.75em);
   line-height: 1.2;
 }
 
@@ -419,7 +530,7 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
 
 .kw-th {
   padding: 14px 16px;
-  font-size: 1.4rem;
+  font-size: 0.875em;
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
@@ -495,7 +606,7 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
   height: 36px;
   padding: 0;
   font: inherit;
-  font-size: 2.4rem;
+  font-size: 1.5em;
   line-height: 1;
   color: var(--kw-muted);
   cursor: pointer;
@@ -550,7 +661,7 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
 .kw-row__variant {
   display: block;
   margin-top: 2px;
-  font-size: 1.3rem;
+  font-size: 0.8125em;
   color: var(--kw-muted);
   overflow-wrap: anywhere;
 }
@@ -602,7 +713,7 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
   width: 34px;
   padding: 0;
   font: inherit;
-  font-size: 1.8rem;
+  font-size: 1.125em;
   line-height: 1;
   color: var(--kw-text);
   cursor: pointer;
@@ -741,7 +852,7 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
 
 .kw-empty__title {
   margin: 0 0 8px;
-  font-size: 2.2rem;
+  font-size: 1.375em;
 }
 
 .kw-empty__text {
@@ -986,7 +1097,7 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
 /* Line total (estimated subtotal) under the unit price, and the max-quantity note. */
 .kw-line {
   margin-top: 4px;
-  font-size: 1.3rem;
+  font-size: 0.8125em;
   font-weight: 400;
   color: var(--kw-muted);
 }
@@ -998,7 +1109,7 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
 .kw-action__note {
   display: block;
   margin-bottom: 6px;
-  font-size: 1.3rem;
+  font-size: 0.8125em;
   color: var(--kw-in);
 }
 
