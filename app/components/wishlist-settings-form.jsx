@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBlocker, useFetcher, useLocation, useNavigate } from "react-router";
 import { withEmbeddedParams } from "../utils/embedded-url";
-import { OPTION_LABELS, SPEC, isAppearanceDirty, sectionDefaults, validateAppearance } from "../utils/wishlist-appearance-shared";
+import { CSS_EXAMPLES, CSS_SCOPES, MAX_CSS_CHARS } from "../utils/custom-css-shared";
+import { HEADER_TEXT_MAX, OPTION_LABELS, SPEC, isAppearanceDirty, sectionDefaults, validateAppearance } from "../utils/wishlist-appearance-shared";
 import { Page } from "./merchant-ui";
 import { NativeSaveBar } from "./native-save-bar";
 import { themeEditorLinks } from "../utils/theme-editor";
@@ -37,6 +38,38 @@ function ColorControl({ label, value, onValue, error, details }) {
       {value ? (
         <s-button variant="tertiary" onClick={() => onValue(null)}>
           Use default
+        </s-button>
+      ) : null}
+    </div>
+  );
+}
+
+// An optional advanced override. The server compiles it with the policy in utils/custom-css-shared.js (the same function the
+// preview uses), so a rule that would be refused on save is flagged here as it is typed.
+function CssControl({ scope, value, onValue, error }) {
+  const { root, label } = CSS_SCOPES[scope];
+  return (
+    <div className="kv-css">
+      <WcField
+        as="s-text-area"
+        label={`Custom CSS for the ${label}`}
+        rows={8}
+        value={value ?? ""}
+        onValue={onValue}
+        error={error || undefined}
+        placeholder={CSS_EXAMPLES[scope].split("\n").slice(0, 3).join("\n")}
+        details={`Optional, for advanced use. Rules apply only inside ${root} (a selector that does not start with it gets ${root} put in front). No url(), @import or backslashes. ${(value ?? "").length}/${MAX_CSS_CHARS} characters.`}
+      />
+      <details className="kv-css-example">
+        <summary>Show an example</summary>
+        <pre>{CSS_EXAMPLES[scope]}</pre>
+        <s-button variant="tertiary" onClick={() => onValue(CSS_EXAMPLES[scope])}>
+          Use this example
+        </s-button>
+      </details>
+      {value ? (
+        <s-button variant="tertiary" onClick={() => onValue("")}>
+          Reset to default
         </s-button>
       ) : null}
     </div>
@@ -158,6 +191,7 @@ export function WishlistSettingsForm({ appearance, shop, apiKey, modal }) {
           checked={g.useThemeFonts}
           onChecked={set("general", "useThemeFonts")}
         />
+        <CssControl scope="icon" value={g.customCss} onValue={set("general", "customCss")} error={err("general", "customCss")} />
       </>
     ),
     productPage: (
@@ -217,6 +251,7 @@ export function WishlistSettingsForm({ appearance, shop, apiKey, modal }) {
             onValue={set("productPage", "position")}
             details="Only visible when the width is not full. Where the block sits on the page (for example under Add to cart) is set by where you place it in the theme editor."
           />
+          <CssControl scope="product" value={p.customCss} onValue={set("productPage", "customCss")} error={err("productPage", "customCss")} />
 
           </>
         ) : null}
@@ -260,6 +295,22 @@ export function WishlistSettingsForm({ appearance, shop, apiKey, modal }) {
           checked={w.headerIcon}
           onChecked={set("wishlistPage", "headerIcon")}
         />
+        {w.headerIcon ? (
+          <>
+            <WcSelect label="Header link shows" value={w.headerStyle} options={OPTION_LABELS.headerStyle} onValue={set("wishlistPage", "headerStyle")} />
+            {w.headerStyle !== "icon" ? (
+              <WcField
+                label="Header link text"
+                value={w.headerText}
+                maxLength={HEADER_TEXT_MAX}
+                onValue={set("wishlistPage", "headerText")}
+                error={err("wishlistPage", "headerText") || undefined}
+                details="Empty: “My wishlist”."
+              />
+            ) : null}
+          </>
+        ) : null}
+        <CssControl scope="page" value={w.customCss} onValue={set("wishlistPage", "customCss")} error={err("wishlistPage", "customCss")} />
       </>
     ),
   };

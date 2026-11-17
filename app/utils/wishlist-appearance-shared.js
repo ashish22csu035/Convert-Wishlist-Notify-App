@@ -12,8 +12,13 @@
 // The server is the authority: validateAppearance() runs on every save, and normalizeStored() makes anything
 // read back from the database (or sent to the storefront) safe, whatever is in the column.
 
+import { compileCustomCss } from "./custom-css-shared.js";
+
 export const APPEARANCE_VERSION = 1;
-export const MAX_APPEARANCE_BYTES = 4096;
+// Three Custom CSS fields of up to MAX_CSS_CHARS characters each (see custom-css-shared.js) make the document larger than the
+// plain settings ever were, so the cap leaves room for them.
+export const MAX_APPEARANCE_BYTES = 40000;
+export const HEADER_TEXT_MAX = 30;
 
 // The heart colour of an untouched store (konvert-wishlist.css), used only to draw the preview.
 export const THEME_ACCENT_FALLBACK = "#d6336c";
@@ -34,6 +39,9 @@ export const wishlistIconSvg = () =>
 const enumOf = (options, fallback) => ({ type: "enum", options, default: fallback });
 const bool = (fallback) => ({ type: "bool", default: fallback });
 const color = () => ({ type: "color", default: null });
+// Custom CSS: text that must compile under the policy in custom-css-shared.js. `scope` names which part of the storefront it may touch.
+const css = (scope) => ({ type: "css", scope, default: "" });
+const label = (max, fallback) => ({ type: "text", max, default: fallback });
 const int = (min, max, fallback, nullable = false) => ({ type: "int", min, max, default: fallback, nullable });
 
 // Every supported setting. Order here is the order of keys in a sparse document.
@@ -44,6 +52,7 @@ export const SPEC = {
     hoverColor: color(),
     activeColor: color(),
     useThemeFonts: bool(true),
+    customCss: css("icon"), // advanced override for the Wishlist icon only
   },
   productPage: {
     enabled: bool(true),
@@ -60,6 +69,7 @@ export const SPEC = {
     buttonRadius: int(0, 50, null, true), // null = follow the theme's button radius
     widthMode: enumOf(["full", "auto", "manual"], "full"),
     manualWidth: int(100, 800, 240),
+    customCss: css("product"), // advanced override for the Wishlist button block only
   },
   collectionPage: {
     enabled: bool(true),
@@ -71,6 +81,9 @@ export const SPEC = {
   wishlistPage: {
     layout: enumOf(["table", "grid"], "table"),
     headerIcon: bool(true), // the header shortcut to the Wishlist page (still needs the theme embed to be on)
+    headerStyle: enumOf(["icon", "text", "icon_text"], "icon"), // what that shortcut shows
+    headerText: label(HEADER_TEXT_MAX, "My wishlist"), // its label when headerStyle shows text
+    customCss: css("page"), // advanced override for the Wishlist page only
   },
 };
 
@@ -87,6 +100,7 @@ export const OPTION_LABELS = {
   collectionPosition: [["top-right", "Top right"], ["top-left", "Top left"], ["bottom-left", "Bottom left"], ["bottom-right", "Bottom right"]],
   countDisplay: [["header_badge", "Count badge on the header icon"], ["none", "No count"]],
   layout: [["table", "Table"], ["grid", "Grid"]],
+  headerStyle: [["icon", "Icon"], ["text", "Text"], ["icon_text", "Icon and text"]],
 };
 
 const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -121,6 +135,20 @@ export function parseField(spec, raw) {
       const number = typeof raw === "number" ? raw : typeof raw === "string" && /^\d{1,6}$/.test(raw.trim()) ? Number(raw.trim()) : NaN;
       if (Number.isInteger(number) && number >= spec.min && number <= spec.max) return { ok: true, value: number };
       return { ok: false, error: `Enter a whole number from ${spec.min} to ${spec.max}.` };
+    }
+    case "css": {
+      if (raw === null || raw === undefined) return { ok: true, value: "" };
+      const compiled = compileCustomCss(raw, spec.scope);
+      return compiled.ok ? { ok: true, value: raw.trim() } : { ok: false, error: compiled.error };
+    }
+    case "text": {
+      if (typeof raw !== "string") return { ok: false, error: "Enter some text." };
+      const value = raw.trim().replace(/\s+/g, " ");
+      if (!value) return { ok: true, value: spec.default };
+      if (value.length > spec.max) return { ok: false, error: `Use at most ${spec.max} characters.` };
+      // eslint-disable-next-line no-control-regex -- control characters are refused on purpose
+      if (/[<>&"\u0000-\u001f]/.test(value)) return { ok: false, error: "Use plain text without < > & or quotes." };
+      return { ok: true, value };
     }
     default:
       return { ok: false, error: "Unsupported setting." };
@@ -186,7 +214,28 @@ export function normalizeStored(raw) {
 }
 
 // The storefront gets exactly the sparse, validated document. Nothing else from the row is ever added to it.
-export const publicAppearance = normalizeStored;
+// Custom CSS never travels inside this document: it is delivered separately, already compiled (publicCustomCss), so the
+// storefront script has no raw merchant text to interpret. Header text is display text and stays.
+export function publicAppearance(raw) {
+  const sparse = normalizeStored(raw);
+  for (const section of SECTIONS) {
+    if (!sparse[section]) continue;
+    delete sparse[section].customCss;
+    if (!Object.keys(sparse[section]).length) delete sparse[section];
+  }
+  return sparse;
+}
+
+// The compiled, confined CSS per scope: { icon, product, page }, only non-empty ones. Rebuilt from the parsed rules on every call.
+export function publicCustomCss(raw) {
+  const sparse = normalizeStored(raw);
+  const out = {};
+  for (const [scope, section] of [["icon", "general"], ["product", "productPage"], ["page", "wishlistPage"]]) {
+    const compiled = compileCustomCss(sparse[section]?.customCss, scope);
+    if (compiled.ok && compiled.css) out[scope] = compiled.css;
+  }
+  return out;
+}
 
 // Strict check of what a browser sent. `input` is a JSON string or an object, complete or partial.
 // Returns { values, errors }: `values` holds only the recognised keys that were valid (normalized, defaults

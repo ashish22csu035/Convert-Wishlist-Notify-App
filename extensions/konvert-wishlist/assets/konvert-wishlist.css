@@ -394,6 +394,23 @@ html[data-kw-wishlist-page-header-icon='false'] .kw-header-icon {
   border-radius: 9px;
 }
 
+.kw-header-icon--text {
+  width: auto;
+  min-width: 44px;
+  padding: 0 8px;
+  gap: 6px;
+}
+
+.kw-header-icon__text {
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.kw-header-icon--text .kw-header-icon__count {
+  position: static;
+}
+
 .kw-header-icon__count[hidden] {
   display: none;
 }

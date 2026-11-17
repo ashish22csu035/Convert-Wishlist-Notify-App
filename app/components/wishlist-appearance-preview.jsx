@@ -1,8 +1,8 @@
 /* eslint-disable react/prop-types -- plain JavaScript project: shared helper components are not given PropTypes */
 import { Component, useEffect, useMemo, useRef, useState } from "react";
 import storefrontCss from "virtual:konvert-storefront-css"; // the theme extension's stylesheet, see vite.config.js (a path import would 404 behind Shopify CLI's proxy)
-import { toSparse } from "../utils/wishlist-appearance-shared";
-import { PREVIEW_APP_ID, PREVIEW_HEIGHT, PREVIEW_VIEWPORTS, previewMarkup, previewShell, storefrontHooks } from "../utils/wishlist-preview-document";
+import { publicCustomCss, toSparse } from "../utils/wishlist-appearance-shared";
+import { PREVIEW_APP_ID, PREVIEW_HEIGHT, PREVIEW_VIEWPORTS, headerLink, previewMarkup, previewShell, storefrontHooks } from "../utils/wishlist-preview-document";
 
 // The live preview of the Wishlist Settings being edited. It draws a sample storefront page for the active tab in an
 // <iframe> that uses the REAL storefront stylesheet and class names, with the settings applied the way the storefront
@@ -43,7 +43,7 @@ function applyPicks(doc, tab, picks) {
   });
 }
 
-function syncFrame(frame, tab, hooks, picks = {}, onClick = null) {
+function syncFrame(frame, tab, hooks, picks = {}, onClick = null, extras = {}) {
   const doc = frame?.contentDocument;
   if (!doc || !doc.documentElement) return;
   if (!doc.getElementById(PREVIEW_APP_ID)) {
@@ -63,6 +63,24 @@ function syncFrame(frame, tab, hooks, picks = {}, onClick = null) {
     app.setAttribute("data-tab", tab);
   }
   if (app) applyPicks(doc, tab, picks);
+  // The merchant's Custom CSS, compiled by the same function the storefront's server uses (so what the preview shows is what
+  // is delivered), and the header link in the chosen presentation.
+  let custom = doc.getElementById("kw-custom-css");
+  if (!custom) {
+    custom = doc.createElement("style");
+    custom.id = "kw-custom-css";
+    doc.head.appendChild(custom);
+  }
+  custom.textContent = extras.css ?? "";
+  const link = doc.querySelector(".kw-header-icon");
+  const wanted = `${extras.headerStyle ?? "icon"}|${extras.headerText ?? ""}`;
+  if (link && link.getAttribute("data-pv-header") !== wanted) {
+    const holder = doc.createElement("div");
+    holder.innerHTML = headerLink(extras.headerStyle, extras.headerText);
+    const next = holder.firstElementChild;
+    next.setAttribute("data-pv-header", wanted);
+    link.replaceWith(next);
+  }
 }
 
 // What the saved settings switch off or cannot do, said next to the preview because the preview itself then shows nothing.
@@ -87,7 +105,15 @@ export function AppearancePreview({ tab, values, viewport = "desktop", onViewpor
   // Which hearts the merchant has clicked, per preview size: { desktop: { "<tab>:<n>": true|false }, mobile: { ... } }.
   const [picks, setPicks] = useState({ desktop: {}, mobile: {} });
   const hooks = useMemo(() => storefrontHooks(toSparse(values)), [values]);
-  const hooksKey = JSON.stringify(hooks);
+  const extras = useMemo(
+    () => ({
+      css: Object.values(publicCustomCss(toSparse(values))).join("\n"),
+      headerStyle: values.wishlistPage.headerStyle,
+      headerText: values.wishlistPage.headerText,
+    }),
+    [values],
+  );
+  const hooksKey = JSON.stringify({ hooks, extras });
   const view = PREVIEW_VIEWPORTS[viewport] ?? PREVIEW_VIEWPORTS.desktop;
 
   // Every change of settings or tab is applied to the frame at once. The frame's own load event applies it again for
@@ -114,7 +140,7 @@ export function AppearancePreview({ tab, values, viewport = "desktop", onViewpor
 
   const draw = () => {
     try {
-      syncFrame(frame.current, tab, hooks, picks[viewport] ?? {}, onFrameClick);
+      syncFrame(frame.current, tab, hooks, picks[viewport] ?? {}, onFrameClick, extras);
       setFailed((was) => (was ? false : was));
     } catch (error) {
       console.error("[wishlist-settings] the preview could not be drawn", error?.name, String(error?.message ?? "").slice(0, 200));

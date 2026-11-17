@@ -26,6 +26,7 @@ export function storefrontHooks(appearance) {
   for (const [section, part] of Object.entries(sparse)) {
     if (section === "version") continue;
     for (const [key, value] of Object.entries(part)) {
+      if (key === "customCss" || key === "headerText") continue; // not hooks: the CSS is compiled and injected, the text is drawn in the header link
       const name = `kw-${section}-${key}`.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
       if (typeof value === "number") {
         variables[`--${name}`] = String(value);
@@ -56,13 +57,23 @@ const PRODUCTS = [
 const ICON = wishlistIconSvg();
 const heart = `<span class="kw-heart" aria-hidden="true">${ICON}</span>`;
 
+// The header Wishlist link the way konvert-wishlist-extras.js builds it (icon, text, or both). Pure: the preview redraws it when
+// the merchant changes "Header link" or its text.
+export function headerLink(style = "icon", text = "") {
+  const label = style === "icon" ? "" : String(text || "My wishlist");
+  const mode = style === "icon" ? "icon" : style;
+  const attrs = mode === "icon" ? ' aria-label="My Wishlist"' : "";
+  const cls = mode === "icon" ? "kw-header-icon" : "kw-header-icon kw-header-icon--text";
+  return `<a class="${cls}" href="#" tabindex="-1" data-kw-header-style="${mode}"${attrs}>${mode === "text" ? "" : heart}${mode === "icon" ? "" : `<span class="kw-header-icon__text">${escapeHtml(label)}</span>`}<span class="kw-header-icon__count">3</span></a>`;
+}
+
 function header() {
   return `<header class="pv-header">
   <span class="pv-menu" aria-hidden="true"><i></i><i></i><i></i></span>
   <span class="pv-logo">Sample Store</span>
   <nav class="pv-nav" aria-label="Sample navigation"><span>Home</span><span>Shop</span><span>Collections</span><span>Sale</span><span>Contact</span></nav>
   <span class="pv-icons">
-    <a class="kw-header-icon" href="#" tabindex="-1" aria-label="My Wishlist">${heart}<span class="kw-header-icon__count">3</span></a>
+    ${headerLink()}
     <span class="pv-cart" aria-label="Cart"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 7h12l-1 13H7L6 7z"/><path d="M9 7a3 3 0 016 0"/></svg></span>
   </span>
 </header>`;

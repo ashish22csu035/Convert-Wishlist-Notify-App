@@ -157,7 +157,7 @@ test("four tabs share one screen; General is first; each tab shows its own contr
   assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch")].map((e) => e.getAttribute("label")), ["Show hearts on product cards", "Icon size (px)", "Background opacity (%)", "Position on the product image", "Wishlist count"]);
 
   await goTab("Wishlist page");
-  assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch, s-text-field")].map((e) => e.getAttribute("label")), ["Layout", "Show the Wishlist icon in the header"]);
+  assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch, s-text-field")].map((e) => e.getAttribute("label")), ["Layout", "Show the Wishlist icon in the header", "Header link shows"]);
   assert.equal(container.querySelector('[role="tabpanel"]'), container.querySelector("#kv-tabpanel"));
   await unmount();
 });

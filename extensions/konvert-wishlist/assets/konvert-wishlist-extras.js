@@ -465,12 +465,23 @@
     if (!config.headerIcon || document.querySelector('.kw-header-icon')) return;
     var link = el('a', 'kw-header-icon');
     link.href = config.pagePath;
-    link.setAttribute('aria-label', config.text.headerLabel);
-    var heart = el('span', 'kw-heart');
-    heart.setAttribute('aria-hidden', 'true');
+    // Wishlist Settings > Wishlist page > Header link: the icon (default), a text label, or both. The label is the
+    // merchant's text, or the translated header label when it is empty. A text-only link needs no icon and no aria-label:
+    // its visible text is its name.
+    var style = config.headerStyle === 'text' || config.headerStyle === 'icon_text' ? config.headerStyle : 'icon';
+    var label = style === 'icon' ? '' : String(config.headerText || config.text.headerLabel || '');
+    if (style !== 'icon' && !label) style = 'icon';
+    link.setAttribute('data-kw-header-style', style);
+    if (style === 'icon') link.setAttribute('aria-label', config.text.headerLabel);
+    else link.classList.add('kw-header-icon--text');
     var count = el('span', 'kw-header-icon__count', '0');
     count.hidden = true;
-    link.appendChild(heart);
+    if (style !== 'text') {
+      var heart = el('span', 'kw-heart');
+      heart.setAttribute('aria-hidden', 'true');
+      link.appendChild(heart);
+    }
+    if (style !== 'icon') link.appendChild(el('span', 'kw-header-icon__text', label));
     link.appendChild(count);
     headerLink = link;
     kw.injectHearts(link);
@@ -1684,7 +1695,7 @@
     var box = el('div', 'kw-bulk');
     box.hidden = true;
     var count = el('span', 'kw-bulk__count');
-    var add = el('button', 'kw-btn-cart kw-btn-cart--compact', text('addSelected', 'Add selected to cart'));
+    var add = el('button', 'kw-btn-cart kw-btn-cart--compact', text('addSelected', 'Move selected to cart'));
     var remove = el('button', 'kw-btn-cart kw-btn-cart--outline kw-btn-cart--compact', text('removeSelected', 'Remove selected'));
     add.type = 'button';
     remove.type = 'button';
