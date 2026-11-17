@@ -576,12 +576,9 @@ test("Engaged customers: no search any more; the sort stays with its three optio
   await unmount();
 });
 
-test("Engaged customers: the long explanation is in the popover, not under the table, and says what the task requires", async () => {
+test("Engaged customers: no info icon beside the date range, no explanation paragraph under the table", () => {
   const source = fs.readFileSync("app/routes/app.customers.jsx", "utf8");
-  assert.match(source, /<InfoPopover label="About these figures">/);
-  for (const needle of ["current totals", "Wishlist and Notify Me actions", "no saved items now", "Shopify customer ID", "partly hidden"]) {
-    assert.ok(source.includes(needle), `the popover says: ${needle}`);
-  }
+  assert.equal(/InfoPopover|CustomersInfo|actions=/.test(source), false, "the (i) button is gone");
   assert.equal(/<p className="kv-note">“Saved items”/.test(source), false, "the old paragraph under the table is gone");
   assert.equal(/customer\.(email|name|firstName|lastName)/i.test(source), false, "no personal data is read here");
 });

@@ -5,7 +5,7 @@ import { getCustomersReport, parseChoice } from "../models/reporting.server";
 import { maskedCustomerEmails } from "../models/customer-emails.server";
 import { CUSTOMER_SORTS } from "../utils/dashboard-constants";
 import { describePeriod } from "../utils/period";
-import { Card, CustomerLink, EmptyState, InfoPopover, MerchantErrorBoundary, NoShopState, Page, Pager, ParamSelect, formatDate, formatNumber } from "../components/merchant-ui";
+import { Card, CustomerLink, EmptyState, MerchantErrorBoundary, NoShopState, Page, Pager, ParamSelect, formatDate, formatNumber } from "../components/merchant-ui";
 
 export const loader = async ({ request }) => {
   const { admin, shop, days, period, view, page, params } = await loadMerchantContext(request);
@@ -16,29 +16,11 @@ export const loader = async ({ request }) => {
   return { days, period: view, page, sort, report, emails };
 };
 
-// What the numbers on this screen mean, in one place behind the (i) button.
-function CustomersInfo() {
-  return (
-    <InfoPopover label="About these figures">
-      <ul>
-        <li>
-          <strong>Saved items</strong> and <strong>Active Notify Me</strong>: current totals.
-        </li>
-        <li>
-          <strong>Activity</strong>: Wishlist and Notify Me actions.
-        </li>
-        <li>Customers may have activity even when they have no saved items now.</li>
-        <li>Emails are partly hidden. If no email is available, the Shopify customer ID is shown.</li>
-      </ul>
-    </InfoPopover>
-  );
-}
-
 export default function CustomersPage() {
   const { period, page, report, sort, emails } = useLoaderData();
   const words = describePeriod(period);
   return (
-    <Page title="Engaged customers" subtitle="Logged-in customers who use Wishlist or Notify Me." period={period} actions={<CustomersInfo />}>
+    <Page title="Engaged customers" subtitle="Logged-in customers who use Wishlist or Notify Me." period={period}>
       {!report ? (
         <NoShopState />
       ) : (
