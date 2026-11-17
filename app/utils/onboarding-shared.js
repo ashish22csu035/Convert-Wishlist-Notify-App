@@ -69,6 +69,20 @@ export function detectThemeSetup(extensions) {
   return { embed: embed ? known(embed.status) : null, product: productState };
 }
 
+// What the Dashboard shows for the setup guide, from setupChecklist()'s answer. The guide follows the REAL setup state on every
+// load, not a saved flag: complete = hidden, and it comes back by itself when a step stops being true (embed switched off,
+// block removed). A step Shopify could not report is not complete, so the guide stays. While the first answer from Shopify is
+// pending and the first step is done, the guide could still turn out to be complete, so nothing is drawn yet (no flash).
+//   "hidden"  all three steps are confirmed complete
+//   "wait"    waiting for Shopify's answer
+//   "bar"     not complete, and the merchant closed it: the one-line "Show setup guide" bar
+//   "guide"   the full guide
+export function guideView(checklist, { appearanceSaved = false, theme } = {}) {
+  if (checklist.allDone) return "hidden";
+  if (theme === undefined && appearanceSaved) return "wait";
+  return checklist.dismissed ? "bar" : "guide";
+}
+
 export const SETUP_STEPS = [
   { key: "configure", title: "Design your Wishlist", description: "Customize the look and feel of your Wishlist page.", action: "Design Your Wishlist in Wishlist Settings", doneAction: "Design Your Wishlist in Wishlist Settings" },
   { key: "embed", title: "Activate your app in your theme", description: "Enable the Konvert app embed in your Shopify theme.", action: "Activate app embed", doneAction: "Activated" },

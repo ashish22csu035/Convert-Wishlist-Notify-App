@@ -15,7 +15,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { JSDOM } from "jsdom";
-import { EMBED_HANDLE, ONBOARDING_DEFAULT, ONBOARDING_INTENTS, PRODUCT_BLOCK_HANDLE, applyOnboardingIntent, detectThemeSetup, normalizeOnboarding, setupChecklist } from "../app/utils/onboarding-shared.js";
+import { EMBED_HANDLE, ONBOARDING_DEFAULT, ONBOARDING_INTENTS, PRODUCT_BLOCK_HANDLE, applyOnboardingIntent, detectThemeSetup, guideView, normalizeOnboarding, setupChecklist } from "../app/utils/onboarding-shared.js";
 import { DEFAULT_APPEARANCE } from "../app/utils/wishlist-appearance-shared.js";
 import { themeEditorLinks } from "../app/utils/theme-editor.js";
 
@@ -242,9 +242,7 @@ test("there are no manual confirmation buttons or flags anywhere", async () => {
 test("both theme steps complete only when Shopify reports them active", async () => {
   fakeShopify(ON);
   await mountChecklist({ appearanceSaved: true });
-  assert.deepEqual(statuses(), ["Completed", "Completed", "Completed"]);
-  assert.match(container.textContent, /3\/3 completed/);
-  assert.match(container.textContent, /Setup is complete/);
+  assert.equal(container.textContent.trim(), "", "all three confirmed: the guide hides itself, nothing to dismiss");
   await unmount();
 
   fakeShopify([themeExt(block("wishlist-embed", "available"), block("wishlist-button", "available"))]);
@@ -281,11 +279,17 @@ test("while Shopify has not answered yet the steps say Checking and count for no
   fakeShopify(null);
   window.shopify = { app: { extensions: () => new Promise((resolve) => { release = () => resolve(ON); }) } };
   await mountChecklist({ appearanceSaved: true });
-  assert.deepEqual(statuses(), ["Completed", "Checking…", "Checking…"]);
-  assert.match(container.textContent, /1\/3 completed/);
+  assert.equal(container.textContent.trim(), "", "step 1 is done, so the guide could still turn out complete: nothing is drawn while Shopify has not answered (no flash)");
   await act(() => release());
   await act(() => sleep(10));
-  assert.deepEqual(statuses(), ["Completed", "Completed", "Completed"]);
+  assert.equal(container.textContent.trim(), "", "complete: hidden");
+  await unmount();
+
+  // Step 1 not done: the guide can never be complete, so it is drawn at once, with the theme steps Checking and counting for nothing.
+  window.shopify = { app: { extensions: () => new Promise(() => {}) } };
+  await mountChecklist({ appearanceSaved: false });
+  assert.deepEqual(statuses(), ["Action required", "Checking…", "Checking…"]);
+  assert.match(container.textContent, /0\/3 completed/);
   await unmount();
 });
 
@@ -473,7 +477,7 @@ dbTest("a store seen for the first time gets its own shop row, once, and nothing
 
 test("Design your Wishlist opens the real Wishlist Settings form in a dialog over the Dashboard; Cancel closes it", async () => {
   fakeShopify(ON);
-  await mountChecklist({ appearanceSaved: true });
+  await mountChecklist();
   const button = byText("s-button", "Design Your Wishlist in Wishlist Settings");
   assert.equal(button.getAttribute("href"), null, "not a link to another page");
   const modal = container.querySelector("s-modal#wishlist-settings-modal");
@@ -532,22 +536,22 @@ test("steps expand and collapse like a disclosure: one open at a time, the first
 
 test("the row is a real button holding only the indicator, title, pill and chevron; the action lives in the panel", async () => {
   fakeShopify(ON);
-  await mountChecklist({ appearanceSaved: true });
-  assert.deepEqual(openKeys(), [], "everything done: nothing is forced open");
+  await mountChecklist();
+  assert.deepEqual(openKeys(), ["configure"], "the first step that is not complete is the one open");
   for (const key of ["configure", "embed", "product"]) {
     const row = rowOf(key);
     assert.equal(row.tagName, "BUTTON");
     assert.equal(row.getAttribute("type"), "button");
     assert.equal(row.querySelector("s-button"), null, `${key}: no button nested inside the disclosure button`);
     assert.ok(panelOf(key).querySelector("s-button"), `${key}: the action is below the description`);
-    assert.match(row.textContent, /Completed/);
+    assert.match(row.textContent, /ompleted/);
   }
   await unmount();
 });
 
 test("each step has its own decorative illustration beside its text, local SVG, hidden from assistive technology", async () => {
   fakeShopify(ON);
-  await mountChecklist({ appearanceSaved: true });
+  await mountChecklist();
   for (const key of ["configure", "embed", "product"]) {
     const art = panelOf(key).querySelector(".kv-setup-art");
     assert.equal(art.getAttribute("aria-hidden"), "true", key);
@@ -562,7 +566,7 @@ test("each step has its own decorative illustration beside its text, local SVG, 
 
 test("Activated buttons are disabled and carry no link, so they cannot start the setup again", async () => {
   fakeShopify(ON);
-  await mountChecklist({ appearanceSaved: true });
+  await mountChecklist();
   for (const key of ["embed", "product"]) {
     const button = panelOf(key).querySelector("s-button");
     assert.equal(button.textContent.trim(), "Activated");
@@ -570,4 +574,45 @@ test("Activated buttons are disabled and carry no link, so they cannot start the
     assert.equal(button.getAttribute("href"), null);
   }
   await unmount();
+});
+
+// ---- the guide follows the real setup state ----
+test("guideView: hidden only when all three steps are confirmed; unknown, checking-with-step-1-done and incomplete are not", () => {
+  const view = (state, opts) => guideView(setupChecklist(state, opts), opts);
+  const on = { embed: true, product: true };
+  assert.equal(view(null, { appearanceSaved: true, theme: on }), "hidden");
+  assert.equal(view({ dismissed: true }, { appearanceSaved: true, theme: on }), "hidden", "a stale dismissed flag does not matter once complete");
+  assert.equal(view(null, { appearanceSaved: true, theme: { embed: false, product: true } }), "guide", "embed switched off: the guide returns");
+  assert.equal(view(null, { appearanceSaved: true, theme: { embed: true, product: false } }), "guide", "block removed: the guide returns");
+  assert.equal(view(null, { appearanceSaved: true, theme: { embed: null, product: true } }), "guide", "cannot verify: never counted as complete");
+  assert.equal(view(null, { appearanceSaved: false, theme: on }), "guide", "settings never saved");
+  assert.equal(view({ dismissed: true }, { appearanceSaved: true, theme: { embed: false, product: true } }), "bar", "closed while incomplete: the one-line bar");
+  assert.equal(view(null, { appearanceSaved: true, theme: undefined }), "wait", "first answer pending and step 1 done: nothing drawn yet");
+  assert.equal(view(null, { appearanceSaved: false, theme: undefined }), "guide", "step 1 not done: cannot be complete, drawn at once");
+});
+
+test("complete setup hides the guide by itself and clears a stale closed flag; a later change brings the full guide back", async () => {
+  const shopify = fakeShopify(ON);
+  const store = new Map([[SHOP_A, { dismissed: true }]]);
+  const { posted } = await mountChecklist({ store, appearanceSaved: true });
+  assert.equal(container.textContent.trim(), "", "hidden without any click");
+  assert.deepEqual(posted, ["reopen"], "the stale closed flag is cleared once");
+
+  shopify.answer = [themeExt(block("wishlist-embed", "available"), block("wishlist-button", "active", ["template--123__main"]))]; // the merchant switched the embed off
+  await act(() => sleep(3100));
+  await act(() => window.dispatchEvent(new window.Event("focus")));
+  await act(() => sleep(10));
+  assert.equal(container.querySelector("h3")?.textContent, "Get started with Konvert Wishlist And Notify", "the full guide is back, not the one-line bar");
+  assert.deepEqual(statuses(), ["Completed", "Action required", "Completed"]);
+  await unmount();
+});
+
+test("a failed or unreadable Shopify answer never hides the guide", async () => {
+  for (const answer of [new Error("down"), "garbage", []]) {
+    fakeShopify(answer);
+    await mountChecklist({ appearanceSaved: true });
+    assert.ok(container.querySelector("h3"), String(answer));
+    assert.deepEqual(statuses(), ["Completed", "Can’t check", "Can’t check"]);
+    await unmount();
+  }
 });

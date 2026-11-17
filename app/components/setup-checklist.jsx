@@ -3,10 +3,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { ILLUSTRATIONS } from "./setup-illustrations";
 import { WishlistSettingsModal } from "./wishlist-settings-modal";
-import { detectThemeSetup, setupChecklist } from "../utils/onboarding-shared";
+import { detectThemeSetup, guideView, setupChecklist } from "../utils/onboarding-shared";
 import { themeEditorLinks } from "../utils/theme-editor";
 
 const UNKNOWN = { embed: null, product: null };
+const ANSWER_TIMEOUT_MS = 5000;
 const MIN_GAP_MS = 3000; // focus events can arrive in bursts: one Shopify request at most every few seconds
 
 // Asks Shopify (App Bridge, in the merchant's Admin) which of the app's blocks are active on the published theme. It runs
@@ -26,7 +27,8 @@ function useThemeSetup() {
     let answer = UNKNOWN;
     try {
       const app = window.shopify?.app; // App Bridge, loaded by the Admin
-      if (typeof app?.extensions === "function") answer = detectThemeSetup(await app.extensions());
+      // A call that never answers must not leave the guide waiting for ever: after a few seconds it counts as "cannot tell".
+      if (typeof app?.extensions === "function") answer = detectThemeSetup(await Promise.race([app.extensions(), new Promise((resolve) => setTimeout(() => resolve(null), ANSWER_TIMEOUT_MS))]));
     } catch {
       answer = UNKNOWN;
     }
@@ -71,8 +73,17 @@ export function SetupChecklist({ setup }) {
   // One step open at a time. Until the merchant picks one, the first step that is not complete is open (none when all are).
   const expanded = picked === undefined ? (steps.find((step) => !step.completed)?.key ?? null) : picked;
 
-  if (dismissed && allDone) return null;
-  if (dismissed) {
+  const view = guideView({ allDone, dismissed }, { appearanceSaved: setup.appearanceSaved, theme });
+
+  // Setup is complete: the guide is hidden because the real checks say so. A saved "closed" flag is cleared, so that if a step
+  // later stops being true (embed switched off, block removed) the full guide returns instead of the one-line bar.
+  useEffect(() => {
+    if (allDone && dismissed && fetcher.state === "idle") send("reopen");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the completion state matters
+  }, [allDone, dismissed]);
+
+  if (view === "hidden" || view === "wait") return null;
+  if (view === "bar") {
     return (
       <section className="kv-card kv-setup kv-setup-hidden" aria-label="Setup guide">
         <span>
@@ -163,7 +174,6 @@ export function SetupChecklist({ setup }) {
           })}
         </ol>
       ) : null}
-      {open && allDone ? <p className="kv-setup-help kv-setup-finish">Setup is complete. You can dismiss this guide.</p> : null}
       <WishlistSettingsModal open={designOpen} onClosed={() => setDesignOpen(false)} />
     </section>
   );
