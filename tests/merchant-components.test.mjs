@@ -967,17 +967,17 @@ test("dashboard chart: shows the revenue headline, one stacked bar per day and t
   await unmount();
 });
 
-test("dashboard chart: the tooltip shows that day's exact revenue per feature and its orders; the Interest view reads saves and sign-ups", async () => {
+test("dashboard chart: the tooltip shows that day's exact revenue per feature and its orders; the Interest view reads saves and requests", async () => {
   await mount(dchart());
   await hoverDay("2026-10-03");
   assert.equal(tooltip().querySelector(".kv-tooltip-date").textContent, "October 3, 2026");
   assert.deepEqual(tooltipRows(), [["Wishlist", "$229.00"], ["Notify Me", "$129.00"], ["Orders", "2"]]);
   await click(switchButtons()[1]);
   assert.equal(container.querySelector("[data-testid=chart-total]").textContent, "7");
-  assert.match(container.querySelector(".kv-dchart-sub").textContent, /^5 Wishlist saves · 2 Notify Me sign-ups/);
-  assert.deepEqual(legend(), ["Wishlist saves", "Notify Me sign-ups"]);
+  assert.match(container.querySelector(".kv-dchart-sub").textContent, /^5 Wishlist saves · 2 Notify Me requests/);
+  assert.deepEqual(legend(), ["Wishlist saves", "Notify Me requests"]);
   await hoverDay("2026-10-01");
-  assert.deepEqual(tooltipRows(), [["Wishlist saves", "3"], ["Notify Me sign-ups", "1"]]);
+  assert.deepEqual(tooltipRows(), [["Wishlist saves", "3"], ["Notify Me requests", "1"]]);
   await unmount();
 });
 

@@ -165,9 +165,28 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   flex: 1 1 auto;
   min-height: 0;
 }
+/* Recent activity never sets the row height: its body is sized by the row (set by the chart), and the list scrolls inside it. */
+.kv-split > .kv-card > .kv-card-body:has(> .kv-feed) {
+  contain: size;
+  display: flex;
+  flex-direction: column;
+}
+.kv-split > .kv-card > .kv-card-body > .kv-feed {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+}
 @media (max-width: 900px) {
   .kv-split {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* Stacked: there is no neighbour to match, so the body sizes to a capped list again. */
+  .kv-split > .kv-card > .kv-card-body:has(> .kv-feed) {
+    contain: none;
+    display: block;
+  }
+  .kv-split > .kv-card > .kv-card-body > .kv-feed {
+    max-height: 340px;
   }
 }
 

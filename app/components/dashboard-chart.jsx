@@ -139,17 +139,17 @@ export function DashboardChart({ revenue, interest, revenueAvailable = true, ran
   const current = canShowRevenue ? view : "interest";
   const isRevenue = current === "revenue";
   const data = isRevenue ? revenue : interest;
-  const names = isRevenue ? { wishlist: "Wishlist", notifyMe: "Notify Me" } : { wishlist: "Wishlist saves", notifyMe: "Notify Me sign-ups" };
+  const names = isRevenue ? { wishlist: "Wishlist", notifyMe: "Notify Me" } : { wishlist: "Wishlist saves", notifyMe: "Notify Me requests" };
   const [first, second] = FEATURES.map((feature) => ({ ...feature, label: names[feature.key], values: data[feature.key] }));
   const format = isRevenue ? (v) => money(v, revenue.currency) : (v) => new Intl.NumberFormat("en-US").format(v);
   const axisFormat = isRevenue ? (v) => money(v, revenue.currency, true).replace(/\.0(?=[A-Za-z]|$)/, "") : (v) => String(Math.round(v));
   const headline = isRevenue ? money(revenue.total, revenue.currency) : new Intl.NumberFormat("en-US").format(sum(interest.wishlist) + sum(interest.notifyMe));
   const detail = isRevenue
     ? `${plural(revenue.ordersTotal, "order")} · ${rangeLabel}`
-    : `${plural(sum(interest.wishlist), "Wishlist save")} · ${plural(sum(interest.notifyMe), "Notify Me sign-up")} · ${rangeLabel}`;
+    : `${plural(sum(interest.wishlist), "Wishlist save")} · ${plural(sum(interest.notifyMe), "Notify Me request")} · ${rangeLabel}`;
   const summary = isRevenue
     ? `Revenue from Wishlist and Notify Me, ${rangeLabel}: ${headline} from ${plural(revenue.ordersTotal, "order")}.`
-    : `Wishlist saves and Notify Me sign-ups, ${rangeLabel}: ${plural(sum(interest.wishlist), "save")} and ${plural(sum(interest.notifyMe), "sign-up")}.`;
+    : `Wishlist saves and Notify Me requests, ${rangeLabel}: ${plural(sum(interest.wishlist), "save")} and ${plural(sum(interest.notifyMe), "request")}.`;
 
   return (
     <div className="kv-dchart">
