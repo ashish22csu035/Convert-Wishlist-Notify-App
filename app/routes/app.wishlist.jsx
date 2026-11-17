@@ -101,9 +101,9 @@ export default function WishlistPage() {
           <Card flush>
             {tab === "products" ? (
               <>
-                <div className="kv-toolbar">
+                <div className="kv-toolbar kv-toolbar--search">
                   <SearchBox value={data.q} placeholder="Search saved products" />
-                  <div style={{ minWidth: 180 }}>
+                  <div className="kv-toolbar-select">
                     <ParamSelect label="Sort by" param="sort" value={data.sort} options={Object.entries(WISHLIST_SORTS)} />
                   </div>
                 </div>
@@ -138,7 +138,6 @@ export default function WishlistPage() {
                   </s-table>
                 )}
                 <Pager page={page} total={data.total} noun="saved variants" />
-                <p className="kv-note">Each row is one product variant. “Customers saving” is how many customers have it saved right now; this list is not limited by the date range. Revenue is shown as a total above, not per product, because an order is credited to the item that matched the customer’s last touch.</p>
               </>
             ) : (
               <>

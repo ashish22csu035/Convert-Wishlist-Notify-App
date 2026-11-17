@@ -480,6 +480,54 @@ html[data-kv-loading] s-page { opacity: 0; pointer-events: none; transition: opa
   align-items: center;
   justify-content: flex-end;
 }
+/* Search field, Search button and sort select on one centred row: the field takes the free width, the others keep their size. */
+.kv-toolbar--search {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.kv-toolbar--search .kv-toolbar-select {
+  flex: 0 0 180px;
+}
+.kv-toolbar--search s-button {
+  flex: none;
+}
+@media (max-width: 560px) {
+  .kv-toolbar--search {
+    flex-wrap: wrap;
+  }
+}
+/* Compact status guide above the Subscriptions table. */
+.kv-guide {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--kv-border-soft);
+  font-size: 13px;
+  line-height: 20px;
+}
+.kv-guide-title {
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+.kv-guide ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kv-guide li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kv-guide li > span {
+  color: var(--kv-subdued);
+}
+.kv-guide p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--kv-subdued);
+}
 .kv-toolbar .grow {
   flex: 1 1 220px;
   min-width: 0;

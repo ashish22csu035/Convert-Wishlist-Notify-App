@@ -18,7 +18,6 @@ import {
   ParamSelect,
   ProductCell,
   REVENUE_TIPS,
-  STATUS_HELP,
   StatusBadge,
   Tabs,
   attributionView,
@@ -26,6 +25,12 @@ import {
   formatDate,
   formatNumber,
 } from "../components/merchant-ui";
+
+// Short copy for the Subscriptions status guide. "Email sent" only says the mail server accepted it, never that it arrived.
+const STATUS_GUIDE = [
+  ["ACTIVE", "Waiting for the item to return to stock."],
+  ["FULFILLED", "Accepted by the mail server; inbox delivery is not guaranteed."],
+];
 
 const TABS = [
   ["subscriptions", "Subscriptions"],
@@ -176,18 +181,18 @@ export default function NotifyMePage() {
             </div>
             {tab === "emails" ? null : (
               <>
-                <ul className="kv-legend-list">
-                  {Object.keys(filters)
-                    .filter((key) => key !== "all")
-                    .map((key) => (
-                      <li key={key}>
-                        <strong>{filters[key]}</strong>: {STATUS_HELP[key]}
+                <div className="kv-guide" aria-label="Status guide">
+                  <div className="kv-guide-title">Status guide</div>
+                  <ul>
+                    {STATUS_GUIDE.map(([status, text]) => (
+                      <li key={status}>
+                        <StatusBadge status={status} />
+                        <span>{text}</span>
                       </li>
                     ))}
-                </ul>
-                <p className="kv-note" style={{ paddingTop: 8 }}>
-                  Showing every subscription that is waiting or has had an email sent, newest first. This list is not limited by the date range. “Customers Waiting” is how many customers are waiting for that item right now. “Last email” is the result of the latest restock email for that subscription.
-                </p>
+                  </ul>
+                  <p>Subscriptions awaiting restock or previously emailed, newest first. This list is independent of the date filter.</p>
+                </div>
               </>
             )}
             {data.rows.length === 0 ? (
