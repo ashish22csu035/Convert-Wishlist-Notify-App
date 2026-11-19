@@ -188,13 +188,29 @@ export function recordWishlistClick(identity, { productGid, variantGid }) {
   });
 }
 
-// Called only after the My Wishlist page confirms that Shopify added the line.
+// A retried or repeated report of the same cart addition (a network retry, a double click, a second tab) must not count twice.
+// There is no per-request id to make it unique, so a report for the same customer and variant within this window of an
+// earlier one is the same addition. Two different products are never the same addition, so a bulk "Move selected to cart"
+// records one event per product that Shopify confirmed.
+export const CART_ADD_DEDUPE_MS = 30 * 1000;
+
+// Called only after the My Wishlist page confirms that Shopify added the line. One call = one product; the bulk action
+// calls it once for each product it added, and never for one the cart refused.
 export function recordWishlistCartAdd(identity, { productGid, variantGid }) {
   return mutate(identity, "WISHLIST", async (tx, context) => {
     const existing = await tx.wishlistItem.findFirst({ where: itemWhere(context.actor.id, { productGid, variantGid }) });
-    if (existing?.productGid === productGid) {
-      await logEvent(tx, context, "WISHLIST_ADDED_TO_CART", existing.productGid, existing.variantGid);
-    }
-    return { recorded: existing?.productGid === productGid };
+    if (existing?.productGid !== productGid) return { recorded: false };
+    const repeat = await tx.activityEvent.findFirst({
+      where: {
+        actorId: context.actor.id,
+        type: "WISHLIST_ADDED_TO_CART",
+        variantGid: existing.variantGid,
+        occurredAt: { gte: new Date(Date.now() - CART_ADD_DEDUPE_MS) },
+      },
+      select: { id: true },
+    });
+    if (repeat) return { recorded: false, duplicate: true };
+    await logEvent(tx, context, "WISHLIST_ADDED_TO_CART", existing.productGid, existing.variantGid);
+    return { recorded: true };
   });
 }

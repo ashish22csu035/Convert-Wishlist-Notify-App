@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBlocker, useFetcher, useLocation, useNavigate } from "react-router";
 import { withEmbeddedParams } from "../utils/embedded-url";
-import { OPTION_LABELS, SPEC, isAppearanceDirty, sectionDefaults, validateAppearance } from "../utils/wishlist-appearance-shared";
+import { CSS_EXAMPLES, CSS_SCOPES, MAX_CSS_CHARS } from "../utils/custom-css-shared";
+import { CUSTOM_ICON_EXAMPLE, MAX_ICON_CHARS } from "../utils/custom-icon-shared";
+import { HEADER_TEXT_MAX, OPTION_LABELS, SPEC, isAppearanceDirty, sectionDefaults, validateAppearance } from "../utils/wishlist-appearance-shared";
 import { Page } from "./merchant-ui";
 import { NativeSaveBar } from "./native-save-bar";
 import { themeEditorLinks } from "../utils/theme-editor";
@@ -37,6 +39,69 @@ function ColorControl({ label, value, onValue, error, details }) {
       {value ? (
         <s-button variant="tertiary" onClick={() => onValue(null)}>
           Use default
+        </s-button>
+      ) : null}
+    </div>
+  );
+}
+
+// An optional advanced override. The server compiles it with the policy in utils/custom-css-shared.js (the same function the
+// preview uses), so a rule that would be refused on save is flagged here as it is typed.
+function CssControl({ scope, value, onValue, error }) {
+  const { root, label } = CSS_SCOPES[scope];
+  return (
+    <div className="kv-css">
+      <WcField
+        as="s-text-area"
+        label={`Custom CSS for the ${label}`}
+        rows={8}
+        value={value ?? ""}
+        onValue={onValue}
+        error={error || undefined}
+        placeholder={CSS_EXAMPLES[scope].split("\n").slice(0, 3).join("\n")}
+        details={`Optional, for advanced use. Rules apply only inside ${root} (a selector that does not start with it gets ${root} put in front). No url(), @import or backslashes. ${(value ?? "").length}/${MAX_CSS_CHARS} characters.`}
+      />
+      <details className="kv-css-example">
+        <summary>Show an example</summary>
+        <pre>{CSS_EXAMPLES[scope]}</pre>
+        <s-button variant="tertiary" onClick={() => onValue(CSS_EXAMPLES[scope])}>
+          Use this example
+        </s-button>
+      </details>
+      {value ? (
+        <s-button variant="tertiary" onClick={() => onValue("")}>
+          Reset to default
+        </s-button>
+      ) : null}
+    </div>
+  );
+}
+
+// Shown only when the icon is "Custom": the merchant's own SVG, compiled by utils/custom-icon-shared.js (the same function the
+// server and the preview use), so an icon that would be refused on save is flagged here as it is typed.
+function CustomIconControl({ value, onValue, error }) {
+  return (
+    <div className="kv-css">
+      <WcField
+        as="s-text-area"
+        label="Your icon (SVG)"
+        rows={8}
+        value={value ?? ""}
+        onValue={onValue}
+        error={error || undefined}
+        placeholder={CUSTOM_ICON_EXAMPLE.split("\n").slice(0, 3).join("\n")}
+        details={`Paste an <svg> from your design tool, or just a path’s d="…" data. Leave out fill and stroke colors so the icon follows the colors above; the Wishlist sets the size. Only shapes are allowed (no scripts, images or url()). ${(value ?? "").length}/${MAX_ICON_CHARS} characters.`}
+      />
+      <details className="kv-css-example">
+        <summary>Show an example</summary>
+        <pre>{CUSTOM_ICON_EXAMPLE}</pre>
+        <s-button variant="tertiary" onClick={() => onValue(CUSTOM_ICON_EXAMPLE)}>
+          Use this example
+        </s-button>
+      </details>
+      {value ? (
+        <s-button variant="tertiary" onClick={() => onValue("")}>
+          Clear
         </s-button>
       ) : null}
     </div>
@@ -143,15 +208,21 @@ export function WishlistSettingsForm({ appearance, shop, apiKey, modal }) {
     general: (
       <>
         <WcSelect label="Icon" value={g.iconType} options={OPTION_LABELS.iconType} onValue={set("general", "iconType")} />
-        <ColorControl
-          label="Default icon color"
-          value={g.defaultColor}
-          onValue={set("general", "defaultColor")}
-          error={err("general", "defaultColor")}
-          details={g.defaultColor ? undefined : "Not set: your theme editor’s “Heart color” is used (#d6336c unless you changed it)."}
-        />
-        <ColorControl label="Hover color" value={g.hoverColor} onValue={set("general", "hoverColor")} error={err("general", "hoverColor")} details={g.hoverColor ? undefined : "Not set: the default color."} />
-        <ColorControl label="Saved color" value={g.activeColor} onValue={set("general", "activeColor")} error={err("general", "activeColor")} details={g.activeColor ? undefined : "Not set: the default color. This is the color of an item that is already in the Wishlist."} />
+        {g.iconType === "custom" ? (
+          <CustomIconControl value={g.customIcon} onValue={set("general", "customIcon")} error={err("general", "customIcon")} />
+        ) : (
+          <>
+            <ColorControl
+              label="Default icon color"
+              value={g.defaultColor}
+              onValue={set("general", "defaultColor")}
+              error={err("general", "defaultColor")}
+              details={g.defaultColor ? undefined : "Not set: your theme editor’s “Heart color” is used (#d6336c unless you changed it)."}
+            />
+            <ColorControl label="Hover color" value={g.hoverColor} onValue={set("general", "hoverColor")} error={err("general", "hoverColor")} details={g.hoverColor ? undefined : "Not set: the default color."} />
+            <ColorControl label="Saved color" value={g.activeColor} onValue={set("general", "activeColor")} error={err("general", "activeColor")} details={g.activeColor ? undefined : "Not set: the default color. This is the color of an item that is already in the Wishlist."} />
+          </>
+        )}
         <WcSwitch
           label="Use my theme’s fonts"
           details="On: the Wishlist uses your theme’s fonts. Off: it uses a plain system font."
@@ -217,6 +288,7 @@ export function WishlistSettingsForm({ appearance, shop, apiKey, modal }) {
             onValue={set("productPage", "position")}
             details="Only visible when the width is not full. Where the block sits on the page (for example under Add to cart) is set by where you place it in the theme editor."
           />
+          <CssControl scope="product" value={p.customCss} onValue={set("productPage", "customCss")} error={err("productPage", "customCss")} />
 
           </>
         ) : null}
@@ -260,6 +332,22 @@ export function WishlistSettingsForm({ appearance, shop, apiKey, modal }) {
           checked={w.headerIcon}
           onChecked={set("wishlistPage", "headerIcon")}
         />
+        {w.headerIcon ? (
+          <>
+            <WcSelect label="Header link shows" value={w.headerStyle} options={OPTION_LABELS.headerStyle} onValue={set("wishlistPage", "headerStyle")} />
+            {w.headerStyle !== "icon" ? (
+              <WcField
+                label="Header link text"
+                value={w.headerText}
+                maxLength={HEADER_TEXT_MAX}
+                onValue={set("wishlistPage", "headerText")}
+                error={err("wishlistPage", "headerText") || undefined}
+                details="Empty: “My wishlist”."
+              />
+            ) : null}
+          </>
+        ) : null}
+        <CssControl scope="page" value={w.customCss} onValue={set("wishlistPage", "customCss")} error={err("wishlistPage", "customCss")} />
       </>
     ),
   };

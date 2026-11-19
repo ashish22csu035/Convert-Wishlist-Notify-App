@@ -69,10 +69,18 @@
     return (routes && routes.root) || '/';
   }
 
+  // Wishlist Settings > Icon > Custom: the server sends the merchant's SVG already rebuilt from parsed shapes. Checked again here
+  // (only these tags, no handlers or urls) and otherwise the built-in icon is used.
+  var customIcon = '';
+  function applyCustomIcon(markup) {
+    var ok = typeof markup === 'string' && markup.length <= 6000 && /^<svg [^<>]*>/.test(markup) && !/<(?!\/?(svg|g|path|circle|ellipse|rect|line|polyline|polygon)[\s>\/])/i.test(markup) && !/\son\w+=|url\s*\(|javascript/i.test(markup);
+    customIcon = ok ? markup : '';
+  }
+
   function injectHearts(root) {
     var spots = root.querySelectorAll('.kw-heart');
     for (var i = 0; i < spots.length; i += 1) {
-      if (!spots[i].firstChild) spots[i].innerHTML = HEART_SVG;
+      if (!spots[i].firstChild) spots[i].innerHTML = customIcon || HEART_SVG;
     }
   }
 
@@ -138,6 +146,8 @@
     loadFeatures().then(function (features) {
       applyFeatures(features);
       applyAppearance(features && features.appearance, true);
+      applyCustomCss(features && features.customCss);
+      applyCustomIcon(features && features.customIcon);
       injectHearts(document);
       kw.productIcon = showsProductIcon(features);
 
@@ -185,7 +195,7 @@
       })
       .then(function (json) {
         if (!json || typeof json !== 'object') return null;
-        var value = { wishlist: json.wishlist !== false, notifyMe: json.notifyMe !== false, appearance: json.appearance && typeof json.appearance === 'object' ? json.appearance : null, notifyButton: json.notifyButton && typeof json.notifyButton === 'object' ? json.notifyButton : null };
+        var value = { wishlist: json.wishlist !== false, notifyMe: json.notifyMe !== false, appearance: json.appearance && typeof json.appearance === 'object' ? json.appearance : null, notifyButton: json.notifyButton && typeof json.notifyButton === 'object' ? json.notifyButton : null, customCss: json.customCss && typeof json.customCss === 'object' ? json.customCss : null, customIcon: typeof json.customIcon === 'string' ? json.customIcon : '' };
         try {
           window.sessionStorage.setItem(FEATURES_KEY, JSON.stringify({ t: Date.now(), v: value }));
         } catch (error) {
@@ -234,6 +244,26 @@
   // on <html>, numbers and colours --kw-<section>-<key> variables; the CSS gives them meaning. `final` also applies the
   // two switches that change behaviour, not looks.
   var applied = [];
+  // Wishlist Settings > Custom CSS. The server sends it already compiled and confined to the app's own elements
+  // (icon, product block, Wishlist page); it goes in as text of one <style>, so it can never be read as markup.
+  var customNode = null;
+  function applyCustomCss(map) {
+    var css = '';
+    ['icon', 'product', 'page'].forEach(function (scope) {
+      if (map && typeof map[scope] === 'string' && map[scope].length <= 20000) css += map[scope] + '\n';
+    });
+    if (!css) {
+      if (customNode && customNode.parentNode) customNode.parentNode.removeChild(customNode);
+      customNode = null;
+      return;
+    }
+    if (!customNode) {
+      customNode = document.createElement('style');
+      customNode.id = 'kw-custom-css';
+      document.head.appendChild(customNode);
+    }
+    customNode.textContent = css;
+  }
   var WORD = /^[A-Za-z]{1,30}$/;
   function applyAppearance(a, final) {
     var root = document.documentElement;
@@ -248,7 +278,7 @@
       if (!part || typeof part !== 'object' || !WORD.test(section)) return;
       Object.keys(part).forEach(function (key) {
         var value = part[key];
-        if (!WORD.test(key)) return;
+        if (!WORD.test(key) || key === 'customCss' || key === 'headerText') return;
         var name = ('kw-' + section + '-' + key).replace(/[A-Z]/g, function (l) { return '-' + l.toLowerCase(); });
         var num = typeof value === 'number' && isFinite(value) && Math.abs(value) <= 10000;
         var text = typeof value === 'string';
@@ -265,12 +295,16 @@
     if (final) {
       if ((a.collectionPage || {}).enabled === false) config.collectionCards = false;
       if ((a.wishlistPage || {}).headerIcon === false) config.headerIcon = false;
+      config.headerStyle = (a.wishlistPage || {}).headerStyle || 'icon';
+      config.headerText = (a.wishlistPage || {}).headerText || '';
     }
   }
   var early = readCache(); // last known look first: no flash of the default one
   if (early && early.v) {
     applyAppearance(early.v.appearance);
     applyNotifyButton(early.v.notifyButton);
+    applyCustomCss(early.v.customCss);
+    applyCustomIcon(early.v.customIcon);
   }
 
   window.KonvertWishlist = kw;

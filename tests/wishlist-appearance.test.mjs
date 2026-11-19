@@ -26,10 +26,10 @@ const {
 // ======================= pure rules =======================
 test("defaults reproduce today's storefront: nothing set, theme fonts on, everything shown", () => {
   assert.deepEqual(DEFAULT_APPEARANCE, {
-    general: { iconType: "heart", defaultColor: null, hoverColor: null, activeColor: null, useThemeFonts: true },
-    productPage: { enabled: true, displayMode: "button", imagePosition: "top-right", buttonType: "icon_text", position: "left", buttonStyle: "outline", buttonRadius: null, widthMode: "full", manualWidth: 240 },
+    general: { iconType: "heart", customIcon: "", defaultColor: null, hoverColor: null, activeColor: null, useThemeFonts: true, customCss: "" },
+    productPage: { enabled: true, displayMode: "button", imagePosition: "top-right", buttonType: "icon_text", position: "left", buttonStyle: "outline", buttonRadius: null, widthMode: "full", manualWidth: 240, customCss: "" },
     collectionPage: { enabled: true, iconSize: 22, backgroundOpacity: 92, position: "top-right", countDisplay: "header_badge" },
-    wishlistPage: { layout: "table", headerIcon: true },
+    wishlistPage: { layout: "table", headerIcon: true, headerStyle: "icon", headerText: "My wishlist", customCss: "" },
   });
   assert.equal(Object.isFrozen(DEFAULT_APPEARANCE), true);
   assert.notEqual(sectionDefaults("general"), DEFAULT_APPEARANCE.general, "a reset gets a copy it can edit");

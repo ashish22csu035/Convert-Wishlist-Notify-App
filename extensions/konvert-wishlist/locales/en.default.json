@@ -42,7 +42,7 @@
     "select_all": "Select all products",
     "select_row": "Select",
     "selected_count": "selected",
-    "add_selected": "Add selected to cart",
+    "add_selected": "Move selected to cart",
     "remove_selected": "Remove selected",
     "none_purchasable": "None of the selected products can be added to the cart.",
     "remove_error": "We could not remove some products. Please try again.",

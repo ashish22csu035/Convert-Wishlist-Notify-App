@@ -33,3 +33,6 @@ database.sqlite
 /backups/
 
 kw.tar
+
+# Local-only Docker Compose file (not for the VPS)
+compose.local.yaml

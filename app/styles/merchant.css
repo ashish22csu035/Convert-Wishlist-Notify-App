@@ -1512,3 +1512,25 @@ button.kv-tab {
 .kv-np-email { max-width: 100%; margin: 0 auto; }
 .kv-np-email--mobile { max-width: 390px; }
 .kv-np-email--mobile .kv-email-frame { height: 520px; }
+
+/* Custom CSS editors in Wishlist Settings */
+.kv-css {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.kv-css > s-text-area {
+  align-self: stretch;
+}
+.kv-css-example {
+  font-size: 13px;
+}
+.kv-css-example pre {
+  margin: 8px 0;
+  padding: 8px 12px;
+  overflow-x: auto;
+  background: var(--kv-hover);
+  border-radius: 8px;
+  font-size: 12px;
+}

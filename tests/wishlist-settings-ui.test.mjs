@@ -157,7 +157,7 @@ test("four tabs share one screen; General is first; each tab shows its own contr
   assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch")].map((e) => e.getAttribute("label")), ["Show hearts on product cards", "Icon size (px)", "Background opacity (%)", "Position on the product image", "Wishlist count"]);
 
   await goTab("Wishlist page");
-  assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch, s-text-field")].map((e) => e.getAttribute("label")), ["Layout", "Show the Wishlist icon in the header"]);
+  assert.deepEqual([...container.querySelectorAll("s-select, s-color-field, s-number-field, s-switch, s-text-field")].map((e) => e.getAttribute("label")), ["Layout", "Show the Wishlist icon in the header", "Header link shows"]);
   assert.equal(container.querySelector('[role="tabpanel"]'), container.querySelector("#kv-tabpanel"));
   await unmount();
 });
@@ -166,7 +166,7 @@ test("the options offered are the ones the server accepts", async () => {
   const { element } = formApp();
   await mount(element);
   const offered = async (tabName, label) => (await goTab(tabName), [...select(label).querySelectorAll("s-option")].map((o) => o.getAttribute("value")));
-  assert.deepEqual(await offered("General", "Icon"), ["heart", "star", "bookmark"]);
+  assert.deepEqual(await offered("General", "Icon"), ["heart", "star", "bookmark", "custom"]);
   assert.deepEqual(await offered("Product page", "Button content"), ["icon_text", "icon"]);
   assert.deepEqual(await offered("Product page", "Button style"), ["outline", "filled"]);
   assert.deepEqual(await offered("Product page", "Width"), ["full", "auto", "manual"]);
