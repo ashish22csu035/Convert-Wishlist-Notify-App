@@ -206,7 +206,20 @@ export function compileCustomCss(raw, scopeName) {
 
 // What the "Reset to default" action puts back, and the example shown under each editor.
 export const CSS_EXAMPLES = {
-  icon: `.kw-heart svg {\n  stroke-width: 2.2;\n}\n.kw-btn:hover .kw-heart {\n  transform: scale(1.1);\n}\n.kw-btn[aria-pressed="true"] .kw-heart svg {\n  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));\n}`,
-  product: `.kw-btn {\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n}\n.kw-btn:hover {\n  opacity: 0.9;\n}\n.kw-btn:focus-visible {\n  outline: 2px solid currentColor;\n}\n.kw-btn[aria-pressed="true"] {\n  font-weight: 700;\n}\n.kw-btn:disabled {\n  opacity: 0.5;\n}`,
-  page: `.kw-page__title {\n  font-size: 28px;\n}\n.kw-table img {\n  border-radius: 8px;\n}\n@media (max-width: 600px) {\n  .kw-page__title {\n    font-size: 22px;\n  }\n}`,
+  icon: `.kw-heart {
+  color: #2c813c;
+}
+.kw-btn:hover .kw-heart,
+.kw-header-icon:hover .kw-heart {
+  color: #675b5b;
+}
+.kw-btn[aria-pressed="true"] .kw-heart,
+.kw-header-icon--filled .kw-heart {
+  color: #042508;
+}
+.kw-heart svg {
+  stroke-width: 2.2;
+}`,
+  product: `.kw-block {\n  margin-top: 16px;\n}\n.kw-btn {\n  font-size: 14px;\n  font-weight: 600;\n  letter-spacing: 0.08em;\n  text-transform: uppercase;\n  color: #b23a48;\n  border: 2px solid #b23a48;\n  border-radius: 999px;\n  transition: all 0.2s ease;\n}\n/* The heart follows the button's text color */\n.kw-btn .kw-heart {\n  width: 1.4em;\n  height: 1.4em;\n  color: currentColor;\n}\n/* Hover and keyboard focus */\n.kw-btn:hover {\n  background: #fde8ea;\n  box-shadow: 0 6px 16px rgba(178, 58, 72, 0.18);\n  transform: translateY(-1px);\n}\n.kw-btn:focus-visible {\n  outline: 3px solid rgba(178, 58, 72, 0.35);\n  outline-offset: 3px;\n}\n/* Saved: the button fills in */\n.kw-btn[aria-pressed="true"] {\n  color: #fff;\n  background: #b23a48;\n}\n.kw-btn[aria-pressed="true"]:hover {\n  background: #9c2f3d;\n}\n/* Busy or unavailable */\n.kw-btn:disabled {\n  opacity: 0.6;\n  box-shadow: none;\n  transform: none;\n}\n/* Phones: a taller, full-width button */\n@media (max-width: 600px) {\n  .kw-btn {\n    width: 100%;\n    min-height: 48px;\n  }\n}`,
+  page: `.kw-page {\n  background: #faf6f3;\n  border-radius: 16px;\n}\n.kw-page__title {\n  font-size: 32px;\n  font-weight: 700;\n  letter-spacing: -0.02em;\n}\n.kw-page__count {\n  font-size: 18px;\n  color: #9a8c84;\n}\n/* The product list: a soft white card, with a tinted header row */\n.kw-table-wrap {\n  background: #fff;\n  border: 0;\n  border-radius: 16px;\n  box-shadow: 0 6px 24px rgba(60, 35, 20, 0.08);\n}\n.kw-th {\n  font-size: 12px;\n  letter-spacing: 0.08em;\n  text-transform: uppercase;\n  background: #f4ebe5;\n}\n.kw-row:hover {\n  background: #fffaf6;\n}\n/* Image, title, price and stock */\n.kw-thumb {\n  border-radius: 12px;\n}\n.kw-row__title {\n  font-size: 16px;\n}\n.kw-price {\n  color: #b23a48;\n}\n.kw-stock--in {\n  color: #2c813c;\n}\n/* Buttons: remove (x), Add to cart, and the quantity box */\n.kw-row__remove:hover {\n  color: #b23a48;\n  background: #fde8ea;\n}\n.kw-btn-cart {\n  border-radius: 999px;\n}\n.kw-btn-cart:not(.kw-btn-cart--outline):not(.kw-btn-cart--disabled) {\n  background: #b23a48;\n}\n.kw-qty {\n  border-radius: 999px;\n}\n/* The empty Wishlist */\n.kw-empty__icon {\n  background: #fde8ea;\n}\n.kw-empty__link {\n  background: #b23a48;\n  border-radius: 999px;\n}\n/* Phones */\n@media (max-width: 600px) {\n  .kw-page {\n    border-radius: 0;\n  }\n  .kw-page__title {\n    font-size: 24px;\n  }\n}`,
 };

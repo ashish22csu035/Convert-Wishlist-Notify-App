@@ -166,7 +166,7 @@ test("the options offered are the ones the server accepts", async () => {
   const { element } = formApp();
   await mount(element);
   const offered = async (tabName, label) => (await goTab(tabName), [...select(label).querySelectorAll("s-option")].map((o) => o.getAttribute("value")));
-  assert.deepEqual(await offered("General", "Icon"), ["heart", "star", "bookmark"]);
+  assert.deepEqual(await offered("General", "Icon"), ["heart", "star", "bookmark", "custom"]);
   assert.deepEqual(await offered("Product page", "Button content"), ["icon_text", "icon"]);
   assert.deepEqual(await offered("Product page", "Button style"), ["outline", "filled"]);
   assert.deepEqual(await offered("Product page", "Width"), ["full", "auto", "manual"]);

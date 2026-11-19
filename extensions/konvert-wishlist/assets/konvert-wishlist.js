@@ -69,10 +69,18 @@
     return (routes && routes.root) || '/';
   }
 
+  // Wishlist Settings > Icon > Custom: the server sends the merchant's SVG already rebuilt from parsed shapes. Checked again here
+  // (only these tags, no handlers or urls) and otherwise the built-in icon is used.
+  var customIcon = '';
+  function applyCustomIcon(markup) {
+    var ok = typeof markup === 'string' && markup.length <= 6000 && /^<svg [^<>]*>/.test(markup) && !/<(?!\/?(svg|g|path|circle|ellipse|rect|line|polyline|polygon)[\s>\/])/i.test(markup) && !/\son\w+=|url\s*\(|javascript/i.test(markup);
+    customIcon = ok ? markup : '';
+  }
+
   function injectHearts(root) {
     var spots = root.querySelectorAll('.kw-heart');
     for (var i = 0; i < spots.length; i += 1) {
-      if (!spots[i].firstChild) spots[i].innerHTML = HEART_SVG;
+      if (!spots[i].firstChild) spots[i].innerHTML = customIcon || HEART_SVG;
     }
   }
 
@@ -139,6 +147,7 @@
       applyFeatures(features);
       applyAppearance(features && features.appearance, true);
       applyCustomCss(features && features.customCss);
+      applyCustomIcon(features && features.customIcon);
       injectHearts(document);
       kw.productIcon = showsProductIcon(features);
 
@@ -186,7 +195,7 @@
       })
       .then(function (json) {
         if (!json || typeof json !== 'object') return null;
-        var value = { wishlist: json.wishlist !== false, notifyMe: json.notifyMe !== false, appearance: json.appearance && typeof json.appearance === 'object' ? json.appearance : null, notifyButton: json.notifyButton && typeof json.notifyButton === 'object' ? json.notifyButton : null, customCss: json.customCss && typeof json.customCss === 'object' ? json.customCss : null };
+        var value = { wishlist: json.wishlist !== false, notifyMe: json.notifyMe !== false, appearance: json.appearance && typeof json.appearance === 'object' ? json.appearance : null, notifyButton: json.notifyButton && typeof json.notifyButton === 'object' ? json.notifyButton : null, customCss: json.customCss && typeof json.customCss === 'object' ? json.customCss : null, customIcon: typeof json.customIcon === 'string' ? json.customIcon : '' };
         try {
           window.sessionStorage.setItem(FEATURES_KEY, JSON.stringify({ t: Date.now(), v: value }));
         } catch (error) {
@@ -295,6 +304,7 @@
     applyAppearance(early.v.appearance);
     applyNotifyButton(early.v.notifyButton);
     applyCustomCss(early.v.customCss);
+    applyCustomIcon(early.v.customIcon);
   }
 
   window.KonvertWishlist = kw;

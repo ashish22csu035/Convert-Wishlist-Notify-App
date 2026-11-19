@@ -160,17 +160,16 @@ test("an oversized or malformed document is refused as a whole", () => {
 
 test("the storefront document never carries raw CSS; the compiled, confined CSS travels separately", () => {
   const stored = toSparse({
-    general: { iconType: "star", customCss: "svg { stroke-width: 2 }" },
+    general: { iconType: "custom", customCss: "svg { stroke-width: 2 }" },
     productPage: { customCss: ".kw-btn { color: red }" },
     wishlistPage: { headerStyle: "text", headerText: "My wishlist", customCss: ".kw-page__title { font-size: 30px }" },
   });
   assert.equal(stored.general.customCss, "svg { stroke-width: 2 }", "the editor keeps what the merchant typed");
   const pub = publicAppearance(stored);
   assert.equal(JSON.stringify(pub).includes("customCss"), false);
-  assert.deepEqual(pub.general, { iconType: "star" });
+  assert.deepEqual(pub.general, { iconType: "custom" });
   assert.deepEqual(pub.wishlistPage, { headerStyle: "text" }, "the default text is not stored; the style is");
   assert.deepEqual(publicCustomCss(stored), {
-    icon: ".kw-heart svg{stroke-width:2}",
     product: ".kw-block .kw-btn{color:red}",
     page: ".kw-page .kw-page__title{font-size:30px}",
   });

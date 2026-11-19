@@ -6,7 +6,7 @@
 // real store and the preview cannot drift from it. Only the surrounding "theme" (header, product grid, product page
 // layout) is preview-only: it uses pv-* classes. Nothing here is fetched: products are invented, no script runs and
 // no link goes anywhere.
-import { THEME_ACCENT_FALLBACK, toSparse, wishlistIconSvg } from "./wishlist-appearance-shared.js";
+import { THEME_ACCENT_FALLBACK, dropColorsWhenCustom, toSparse, wishlistIconSvg } from "./wishlist-appearance-shared.js";
 import { previewImagePosition, previewImageUrl } from "./preview-products.js";
 
 export const PREVIEW_VIEWPORTS = {
@@ -21,12 +21,13 @@ export const PREVIEW_APP_ID = "kw-preview-app";
 // attribute so the CSS can tell "set" from "unset"). A test runs the real script and compares.
 export function storefrontHooks(appearance) {
   const sparse = toSparse(appearance);
+  if (sparse.general) dropColorsWhenCustom(sparse.general);
   const attributes = {};
   const variables = {};
   for (const [section, part] of Object.entries(sparse)) {
     if (section === "version") continue;
     for (const [key, value] of Object.entries(part)) {
-      if (key === "customCss" || key === "headerText") continue; // not hooks: the CSS is compiled and injected, the text is drawn in the header link
+      if (key === "customCss" || key === "customIcon" || key === "headerText") continue; // not hooks: the CSS is compiled and injected, the text is drawn in the header link
       const name = `kw-${section}-${key}`.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
       if (typeof value === "number") {
         variables[`--${name}`] = String(value);

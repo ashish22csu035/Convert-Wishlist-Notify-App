@@ -2,7 +2,7 @@ import prisma from "../db.server";
 import { DEFAULT_SETTINGS, FEATURE_FIELDS, validateSettings } from "../utils/settings-shared";
 import { applyOnboardingIntent, normalizeOnboarding } from "../utils/onboarding-shared";
 import { effectiveNotify, mergeNotify, publicNotifyButton, toSparseNotify, validateNotify } from "../utils/notify-settings-shared";
-import { mergeAppearance, normalizeStored, publicAppearance, publicCustomCss, resolveAppearance, toSparse, validateAppearance } from "../utils/wishlist-appearance-shared";
+import { mergeAppearance, normalizeStored, publicAppearance, publicCustomCss, publicCustomIcon, resolveAppearance, toSparse, validateAppearance } from "../utils/wishlist-appearance-shared";
 
 // Merchant settings, stored in ShopSettings: the Wishlist and Notify Me switches. They are independent.
 // A shop with no settings row keeps the default (both on), so existing shops behave as before until the
@@ -179,7 +179,8 @@ export async function getStorefrontFeatures(shopDomain) {
     });
     const flags = pick(shop?.settings ?? null);
     const customCss = publicCustomCss(shop?.settings?.wishlistAppearance);
-    return { wishlist: flags.wishlistEnabled, notifyMe: flags.notifyMeEnabled, appearance: publicAppearance(shop?.settings?.wishlistAppearance), ...(Object.keys(customCss).length ? { customCss } : {}), ...notifyButtonPart(shop?.settings?.notifyMeSettings) };
+    const customIcon = publicCustomIcon(shop?.settings?.wishlistAppearance);
+    return { wishlist: flags.wishlistEnabled, notifyMe: flags.notifyMeEnabled, appearance: publicAppearance(shop?.settings?.wishlistAppearance), ...(Object.keys(customCss).length ? { customCss } : {}), ...(customIcon ? { customIcon } : {}), ...notifyButtonPart(shop?.settings?.notifyMeSettings) };
   } catch (error) {
     console.error("[wishlist] appearance unavailable, answering the switches only", error?.code ?? error?.name ?? "error");
     return { ...(await getFeatureFlags(shopDomain)), appearance: publicAppearance(null) };

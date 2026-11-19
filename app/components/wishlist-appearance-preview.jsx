@@ -1,7 +1,7 @@
 /* eslint-disable react/prop-types -- plain JavaScript project: shared helper components are not given PropTypes */
 import { Component, useEffect, useMemo, useRef, useState } from "react";
 import storefrontCss from "virtual:konvert-storefront-css"; // the theme extension's stylesheet, see vite.config.js (a path import would 404 behind Shopify CLI's proxy)
-import { publicCustomCss, toSparse } from "../utils/wishlist-appearance-shared";
+import { publicCustomCss, publicCustomIcon, toSparse, wishlistIconSvg } from "../utils/wishlist-appearance-shared";
 import { PREVIEW_APP_ID, PREVIEW_HEIGHT, PREVIEW_VIEWPORTS, headerLink, previewMarkup, previewShell, storefrontHooks } from "../utils/wishlist-preview-document";
 
 // The live preview of the Wishlist Settings being edited. It draws a sample storefront page for the active tab in an
@@ -81,6 +81,14 @@ function syncFrame(frame, tab, hooks, picks = {}, onClick = null, extras = {}) {
     next.setAttribute("data-pv-header", wanted);
     link.replaceWith(next);
   }
+  // The merchant's own icon (when "Custom" is chosen and the SVG is valid), else the built-in shapes.
+  const iconMarkup = extras.icon || wishlistIconSvg();
+  for (const spot of doc.querySelectorAll(".kw-heart")) {
+    if (spot.getAttribute("data-pv-icon") !== iconMarkup) {
+      spot.innerHTML = iconMarkup;
+      spot.setAttribute("data-pv-icon", iconMarkup);
+    }
+  }
 }
 
 // What the saved settings switch off or cannot do, said next to the preview because the preview itself then shows nothing.
@@ -108,6 +116,7 @@ export function AppearancePreview({ tab, values, viewport = "desktop", onViewpor
   const extras = useMemo(
     () => ({
       css: Object.values(publicCustomCss(toSparse(values))).join("\n"),
+      icon: publicCustomIcon(toSparse(values)),
       headerStyle: values.wishlistPage.headerStyle,
       headerText: values.wishlistPage.headerText,
     }),

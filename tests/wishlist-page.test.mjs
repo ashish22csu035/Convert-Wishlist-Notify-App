@@ -1355,6 +1355,8 @@ test("bulk: every selected product is added, then removed from the wishlist; cou
 
   assert.equal(posts(page).length, 2, "one add per product, each confirmed on its own");
   assert.deepEqual(removedIds(page), ["1", "4"], "each product left the wishlist after its own add");
+  const recorded = page.log.requests.filter((r) => r.body.op === "cart_add");
+  assert.deepEqual(recorded.map((r) => [String(r.body.productId), String(r.body.variantId)]), [["1", "11"], ["4", "41"]], "the server is told about EACH product that was added: two events for two products");
   assert.equal(page.rows().length, 0);
   assert.equal(page.items.size, 0);
   assert.ok(page.pageBody.find(".kw-empty"), "the empty state is shown");
@@ -1375,6 +1377,7 @@ test("bulk: a product the cart refuses stays in the wishlist and stays selected;
 
   assert.deepEqual(page.cartItems.map((line) => String(line.variant_id)), ["41"], "only the accepted product is in the cart");
   assert.deepEqual(removedIds(page), ["4"], "only the accepted product was removed from the wishlist");
+  assert.deepEqual(page.log.requests.filter((r) => r.body.op === "cart_add").map((r) => String(r.body.variantId)), ["41"], "only the product the cart accepted is reported as a Wishlist Add to cart");
   assert.equal(page.rows().length, 1);
   assert.equal(text(page.rows()[0], ".kw-row__title"), "Snowboard", "the refused product is still listed");
   assert.equal(page.items.size, 1);
